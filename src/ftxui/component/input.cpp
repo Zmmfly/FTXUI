@@ -98,7 +98,7 @@ class InputBase : public ComponentBase, public InputOption {
   // Component implementation:
   Element OnRender() override {
     const bool is_focused = Focused();
-    const auto focused = (!is_focused && !hovered_) ? nothing
+    const auto focused = (!is_focused && !hovered_) ? focus
                          : insert()                 ? focusCursorBarBlinking
                                                     : focusCursorBlockBlinking;
 
@@ -107,13 +107,28 @@ class InputBase : public ComponentBase, public InputOption {
 
     // placeholder.
     if (content->empty()) {
-      auto element = text(placeholder()) | xflex | frame;
+      // Keep the cursor focus on one cell at the input origin. Applying the
+      // focus decorator to the xflex placeholder makes its box span the full
+      // row, and Screen consequently places the terminal/IME cursor at x_max.
+      // The overlay preserves the placeholder while vbox gives the focus row
+      // the same one-line vertical allocation as non-empty input.
+      auto element =
+          vbox({
+              dbox({
+                  hbox({
+                      text(" ") | focused | reflect(cursor_box_),
+                      text("") | xflex,
+                  }),
+                  text(placeholder()),
+              }),
+          }) |
+          xflex | frame;
 
       return transform_func({
                  std::move(element), hovered_, is_focused,
                  true  // placeholder
              }) |
-             focus | reflect(box_);
+             reflect(box_);
     }
 
     Elements elements;
