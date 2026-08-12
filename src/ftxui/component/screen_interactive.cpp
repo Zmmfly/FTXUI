@@ -37,6 +37,11 @@
 #include "ftxui/screen/terminal.hpp"                  // for Dimensions, Size
 #include "ftxui/screen/util.hpp"                      // for util::clamp
 
+// File-scope flag controlled by ScreenInteractive::SetKeylogEnabled().
+// Declared here (before platform #if) so SetKeylogEnabled compiles on all
+// platforms; only actually used in the POSIX EventListener path.
+static std::atomic<bool> g_keylog_enabled{false};
+
 #if defined(_WIN32)
 #define DEFINE_CONSOLEV2_PROPERTIES
 #define WIN32_LEAN_AND_MEAN
@@ -174,9 +179,6 @@ int CheckStdinReady(int usec_timeout) {
   select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv);  // NOLINT
   return FD_ISSET(STDIN_FILENO, &fds);                    // NOLINT
 }
-
-// File-scope flag controlled by ScreenInteractive::SetKeylogEnabled().
-static std::atomic<bool> g_keylog_enabled{false};
 
 // Read char from the terminal.
 void EventListener(std::atomic<bool>* quit, Sender<Task> out) {
