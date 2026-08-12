@@ -9,6 +9,7 @@
 #include <csignal>  // for signal, SIGTSTP, SIGABRT, SIGWINCH, raise, SIGFPE, SIGILL, SIGINT, SIGSEGV, SIGTERM, __sighandler_t, size_t
 #include <cstdint>
 #include <cstdio>                    // for fileno, stdin
+#include <cstdlib>                   // for getenv
 #include <ftxui/component/task.hpp>  // for Task, Closure, AnimationTask
 #include <ftxui/screen/screen.hpp>  // for Pixel, Screen::Cursor, Screen, Screen::Cursor::Hidden
 #include <functional>        // for function
@@ -184,12 +185,17 @@ int CheckStdinReady(int usec_timeout) {
 void EventListener(std::atomic<bool>* quit, Sender<Task> out) {
   auto parser = TerminalInputParser(std::move(out));
 
-  // Optional raw-key debug log, enabled via SetKeylogEnabled().
+  // Optional raw-key debug log, enabled via SetKeylogEnabled(). The library
+  // does not choose an application-specific path; callers opt in explicitly
+  // through the FTXUI_KEYLOG_PATH environment variable.
   FILE* keylog = nullptr;
   if (g_keylog_enabled.load()) {
-    keylog = std::fopen("/tmp/fcode_keylog.txt", "a");
+    const char* keylog_path = std::getenv("FTXUI_KEYLOG_PATH");
+    if (keylog_path && *keylog_path) {
+      keylog = std::fopen(keylog_path, "a");
+    }
     if (keylog) {
-      std::fprintf(keylog, "=== fcode PID %d ===\n", getpid());
+      std::fprintf(keylog, "=== FTXUI PID %d ===\n", getpid());
       std::fflush(keylog);
     }
   }

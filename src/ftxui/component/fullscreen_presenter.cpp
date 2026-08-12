@@ -1,4 +1,4 @@
-// Local gclaw extension for FTXUI's fullscreen alternate-screen presenter.
+// Fullscreen alternate-screen differential presenter for FTXUI.
 #include "ftxui/component/fullscreen_presenter.hpp"
 
 #include <algorithm>

@@ -57,8 +57,12 @@ class ScreenInteractive : public Screen {
   // Options. Must be called before Loop().
   void TrackMouse(bool enable = true);
 
-  /// @brief Enable raw key-event logging to /tmp/fcode_keylog.txt.
-  /// Each line is one read() call in hexadecimal. For TUI debugging.
+  /// @brief Enable raw key-event logging.
+  ///
+  /// The log destination is read from the `FTXUI_KEYLOG_PATH` environment
+  /// variable when the input listener starts. Logging remains disabled when
+  /// the variable is unset or empty. Each line records one read operation in
+  /// hexadecimal for terminal-input debugging.
   static void SetKeylogEnabled(bool enabled);
 
   // Return the currently active screen, nullptr if none.
