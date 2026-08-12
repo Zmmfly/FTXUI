@@ -42,6 +42,10 @@ class ScreenInteractive : public Screen {
   // Options. Must be called before Loop().
   void TrackMouse(bool enable = true);
 
+  /// @brief Enable raw key-event logging to /tmp/fcode_keylog.txt.
+  /// Each line is one read() call in hexadecimal. For TUI debugging.
+  static void SetKeylogEnabled(bool enabled);
+
   // Return the currently active screen, nullptr if none.
   static ScreenInteractive* Active();
 

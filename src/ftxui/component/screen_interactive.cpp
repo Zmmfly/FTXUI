@@ -172,9 +172,22 @@ int CheckStdinReady(int usec_timeout) {
   return FD_ISSET(STDIN_FILENO, &fds);                    // NOLINT
 }
 
+// File-scope flag controlled by ScreenInteractive::SetKeylogEnabled().
+static std::atomic<bool> g_keylog_enabled{false};
+
 // Read char from the terminal.
 void EventListener(std::atomic<bool>* quit, Sender<Task> out) {
   auto parser = TerminalInputParser(std::move(out));
+
+  // Optional raw-key debug log, enabled via SetKeylogEnabled().
+  FILE* keylog = nullptr;
+  if (g_keylog_enabled.load()) {
+    keylog = std::fopen("/tmp/fcode_keylog.txt", "a");
+    if (keylog) {
+      std::fprintf(keylog, "=== fcode PID %d ===\n", getpid());
+      std::fflush(keylog);
+    }
+  }
 
   while (!*quit) {
     if (!CheckStdinReady(timeout_microseconds)) {
@@ -185,10 +198,19 @@ void EventListener(std::atomic<bool>* quit, Sender<Task> out) {
     const size_t buffer_size = 100;
     std::array<char, buffer_size> buffer;                        // NOLINT;
     size_t l = read(fileno(stdin), buffer.data(), buffer_size);  // NOLINT
+    if (keylog && l > 0) {
+      for (size_t i = 0; i < l; ++i) {
+        std::fprintf(keylog, "%02x ",
+                      static_cast<unsigned char>(buffer[i]));
+      }
+      std::fprintf(keylog, "\n");
+      std::fflush(keylog);
+    }
     for (size_t i = 0; i < l; ++i) {
       parser.Add(buffer[i]);  // NOLINT
     }
   }
+  if (keylog) std::fclose(keylog);
 }
 #endif
 
@@ -441,6 +463,10 @@ ScreenInteractive ScreenInteractive::FitComponent() {
 /// ```
 void ScreenInteractive::TrackMouse(bool enable) {
   track_mouse_ = enable;
+}
+
+void ScreenInteractive::SetKeylogEnabled(bool enabled) {
+  g_keylog_enabled.store(enabled);
 }
 
 /// @brief Add a task to the main loop.
