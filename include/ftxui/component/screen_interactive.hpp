@@ -8,6 +8,7 @@
 #include <ftxui/component/receiver.hpp>  // for Receiver, Sender
 #include <functional>                    // for function
 #include <memory>                        // for shared_ptr
+#include <mutex>                         // for mutex
 #include <string>                        // for string
 #include <thread>                        // for thread
 #include <variant>                       // for variant
@@ -111,6 +112,10 @@ class ScreenInteractive : public Screen {
 
   bool track_mouse_ = true;
 
+  // Post() is intentionally callable from worker threads. Protect sender
+  // publication/reset so a concurrent ExitNow() cannot free it between the
+  // null check and Send().
+  std::mutex task_sender_mutex_;
   Sender<Task> task_sender_;
   Receiver<Task> task_receiver_;
 

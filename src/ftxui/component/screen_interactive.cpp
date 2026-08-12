@@ -449,6 +449,7 @@ void ScreenInteractive::TrackMouse(bool enable) {
 void ScreenInteractive::Post(Task task) {
   // Task/Events sent toward inactive screen or screen waiting to become
   // inactive are dropped.
+  std::scoped_lock lock(task_sender_mutex_);
   if (!task_sender_) {
     return;
   }
@@ -762,7 +763,10 @@ void ScreenInteractive::Install() {
   Flush();
 
   quit_ = false;
-  task_sender_ = task_receiver_->MakeSender();
+  {
+    std::scoped_lock lock(task_sender_mutex_);
+    task_sender_ = task_receiver_->MakeSender();
+  }
   event_listener_ =
       std::thread(&EventListener, &quit_, task_receiver_->MakeSender());
   animation_listener_ =
@@ -1100,6 +1104,7 @@ void ScreenInteractive::Exit() {
 // private:
 void ScreenInteractive::ExitNow() {
   quit_ = true;
+  std::scoped_lock lock(task_sender_mutex_);
   task_sender_.reset();
 }
 
