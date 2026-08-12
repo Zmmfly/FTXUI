@@ -5,6 +5,7 @@
 #define FTXUI_COMPONENT_SCREEN_INTERACTIVE_HPP
 
 #include <atomic>                        // for atomic
+#include <chrono>                        // for nanoseconds
 #include <ftxui/component/receiver.hpp>  // for Receiver, Sender
 #include <functional>                    // for function
 #include <memory>                        // for shared_ptr
@@ -28,6 +29,20 @@ struct Event;
 
 using Component = std::shared_ptr<ComponentBase>;
 class ScreenInteractivePrivate;
+
+/// @brief Optional per-screen callbacks for latency instrumentation.
+///
+/// Callbacks may run on any thread posting a task or on the screen loop thread
+/// drawing a frame. They must remain non-blocking. Exceptions are ignored.
+struct ScreenInteractivePerformanceObserver {
+  /// Called after a public Post/TryPost operation has actually queued a task.
+  std::function<void()> on_public_post_accepted;
+
+  /// Called after a rendered Draw completes, or for a cached Draw skip.
+  ///
+  /// A cached skip reports zero elapsed time and `rendered == false`.
+  std::function<void(std::chrono::nanoseconds elapsed, bool rendered)> on_draw;
+};
 
 class ScreenInteractive : public Screen {
  public:
@@ -55,9 +70,26 @@ class ScreenInteractive : public Screen {
   Closure ExitLoopClosure();
 
   // Post tasks to be executed by the loop.
+  /// @brief Try to add a task to the main loop.
+  /// @param task Task to enqueue.
+  /// @return True only when the screen was active and accepted the task.
+  bool TryPost(Task task);
+
+  /// @brief Try to add an event to the main loop.
+  /// @param event Event to enqueue.
+  /// @return True only when the screen was active and accepted the event.
+  bool TryPostEvent(Event event);
+
   void Post(Task task);
   void PostEvent(Event event);
   void RequestAnimationFrame();
+
+  /// @brief Replace the optional per-screen performance observer.
+  /// @param observer Callbacks copied for concurrent notification.
+  ///
+  /// Callback invocation never holds the task-sender or observer mutex.
+  void SetPerformanceObserver(
+      ScreenInteractivePerformanceObserver observer);
 
   CapturedMouse CaptureMouse();
 
@@ -96,6 +128,8 @@ class ScreenInteractive : public Screen {
   bool HandleSelection(bool handled, Event event);
   void RefreshSelection();
   void Draw(Component component);
+  void NotifyPublicPostAccepted() noexcept;
+  void NotifyDraw(std::chrono::nanoseconds elapsed, bool rendered) noexcept;
   void ResetCursorPosition();
 
   void Signal(int signal);
@@ -122,6 +156,12 @@ class ScreenInteractive : public Screen {
   std::mutex task_sender_mutex_;
   Sender<Task> task_sender_;
   Receiver<Task> task_receiver_;
+
+  // The enabled flags keep disabled instrumentation to one atomic branch.
+  // Callback copies are protected separately and invoked after unlocking.
+  std::atomic<unsigned int> performance_observer_flags_{0U};
+  std::mutex performance_observer_mutex_;
+  ScreenInteractivePerformanceObserver performance_observer_;
 
   std::string set_cursor_position;
   std::string reset_cursor_position;

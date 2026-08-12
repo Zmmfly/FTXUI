@@ -73,6 +73,9 @@ namespace {
 
 ScreenInteractive* g_active_screen = nullptr;  // NOLINT
 
+constexpr unsigned int kPerformancePublicPost = 1U << 0U;
+constexpr unsigned int kPerformanceDraw = 1U << 1U;
+
 void Flush() {
   // Emscripten doesn't implement flush. We interpret zero as flush.
   std::cout << '\0' << std::flush;
@@ -469,25 +472,94 @@ void ScreenInteractive::SetKeylogEnabled(bool enabled) {
   g_keylog_enabled.store(enabled);
 }
 
+void ScreenInteractive::SetPerformanceObserver(
+    ScreenInteractivePerformanceObserver observer) {
+  unsigned int flags = 0U;
+  if (observer.on_public_post_accepted) {
+    flags |= kPerformancePublicPost;
+  }
+  if (observer.on_draw) {
+    flags |= kPerformanceDraw;
+  }
+  {
+    std::scoped_lock lock(performance_observer_mutex_);
+    performance_observer_ = std::move(observer);
+  }
+  performance_observer_flags_.store(flags, std::memory_order_release);
+}
+
+// private
+void ScreenInteractive::NotifyPublicPostAccepted() noexcept {
+  if ((performance_observer_flags_.load(std::memory_order_acquire) &
+       kPerformancePublicPost) == 0U) {
+    return;
+  }
+  try {
+    std::function<void()> callback;
+    {
+      std::scoped_lock lock(performance_observer_mutex_);
+      callback = performance_observer_.on_public_post_accepted;
+    }
+    if (callback) {
+      callback();
+    }
+  } catch (...) {
+    // Performance observation must never affect task admission.
+  }
+}
+
+// private
+void ScreenInteractive::NotifyDraw(std::chrono::nanoseconds elapsed,
+                                   bool rendered) noexcept {
+  try {
+    std::function<void(std::chrono::nanoseconds, bool)> callback;
+    {
+      std::scoped_lock lock(performance_observer_mutex_);
+      callback = performance_observer_.on_draw;
+    }
+    if (callback) {
+      callback(elapsed, rendered);
+    }
+  } catch (...) {
+    // Performance observation must never affect rendering or terminal output.
+  }
+}
+
+/// @brief Try to add a task to the main loop.
+/// @ingroup component
+bool ScreenInteractive::TryPost(Task task) {
+  {
+    // Tasks sent toward an inactive screen, or one waiting to become inactive,
+    // are dropped. Notify only after the receiver has accepted the task and
+    // after releasing both queue-facing locks.
+    std::scoped_lock lock(task_sender_mutex_);
+    if (!task_sender_) {
+      return false;
+    }
+    task_sender_->Send(std::move(task));
+  }
+  NotifyPublicPostAccepted();
+  return true;
+}
+
 /// @brief Add a task to the main loop.
 /// It will be executed later, after every other scheduled tasks.
 /// @ingroup component
 void ScreenInteractive::Post(Task task) {
-  // Task/Events sent toward inactive screen or screen waiting to become
-  // inactive are dropped.
-  std::scoped_lock lock(task_sender_mutex_);
-  if (!task_sender_) {
-    return;
-  }
+  std::ignore = TryPost(std::move(task));
+}
 
-  task_sender_->Send(std::move(task));
+/// @brief Try to add an event to the main loop.
+/// @ingroup component
+bool ScreenInteractive::TryPostEvent(Event event) {
+  return TryPost(std::move(event));
 }
 
 /// @brief Add an event to the main loop.
 /// It will be executed later, after every other scheduled events.
 /// @ingroup component
 void ScreenInteractive::PostEvent(Event event) {
-  Post(event);
+  std::ignore = TryPostEvent(std::move(event));
 }
 
 /// @brief Add a task to draw the screen one more time, until all the animations
@@ -965,9 +1037,26 @@ bool ScreenInteractive::HandleSelection(bool handled, Event event) {
 // private
 // NOLINTNEXTLINE
 void ScreenInteractive::Draw(Component component) {
+  const bool observe_draw =
+      (performance_observer_flags_.load(std::memory_order_acquire) &
+       kPerformanceDraw) != 0U;
   if (frame_valid_) {
+    if (observe_draw) {
+      NotifyDraw(std::chrono::nanoseconds::zero(), false);
+    }
     return;
   }
+  const auto draw_started = observe_draw ? std::chrono::steady_clock::now()
+                                         : std::chrono::steady_clock::time_point{};
+  const auto notify_rendered_draw = [this, observe_draw, draw_started] {
+    if (!observe_draw) {
+      return;
+    }
+    NotifyDraw(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - draw_started),
+        true);
+  };
   auto document = component->Render();
   int dimx = 0;
   int dimy = 0;
@@ -1073,6 +1162,7 @@ void ScreenInteractive::Draw(Component component) {
     }
     Clear();
     frame_valid_ = true;
+    notify_rendered_draw();
     return;
   }
 
@@ -1107,6 +1197,7 @@ void ScreenInteractive::Draw(Component component) {
   Flush();
   Clear();
   frame_valid_ = true;
+  notify_rendered_draw();
 }
 
 // private
