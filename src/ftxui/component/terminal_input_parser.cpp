@@ -395,6 +395,60 @@ TerminalInputParser::Output TerminalInputParser::ParseCSI() {
           return ParseMouse(altered, false, std::move(arguments));
         case 'R':
           return ParseCursorPosition(std::move(arguments));
+        case 'u': {
+          // Kitty keyboard protocol CSI-u encoding. Translate unmodified
+          // control-code keys (and Alt-modified keys) back to their
+          // traditional byte representations so existing Event::Return,
+          // Event::Tab, Event::Escape, Event::Ctrl*, Event::Alt* handlers
+          // continue to fire. Modified keys (Shift+Enter, etc.) pass through
+          // as SPECIAL events for the application to intercept.
+          //
+          // CSI-u format: CSI <codepoint> ; <modifier> u
+          //   modifier 1 = none, 2 = Shift, 3 = Alt, 5 = Ctrl, 7 = Alt+Ctrl
+          const int code =
+              arguments.empty() ? 0 : arguments[0];
+          const int mods =
+              arguments.size() > 1 ? arguments[1] : 1;
+
+          // Unmodified control codes (Ctrl+letter, Enter, Tab, Esc, etc.)
+          if (mods == 1) {
+            if (code >= 1 && code <= 26) {
+              // code 8 (BS) is further uniformized to DEL (127) by
+              // g_uniformize, matching the existing Backspace behavior.
+              pending_.clear();
+              pending_ += static_cast<char>(code);
+              return SPECIAL;
+            }
+            if (code == 27) {  // Escape
+              pending_ = "\x1b";
+              return SPECIAL;
+            }
+            if (code == 127) {  // Delete / Backspace
+              pending_ = "\x7f";
+              return SPECIAL;
+            }
+          }
+
+          // Alt + printable ASCII (a-z, A-Z, 0-9, symbols)
+          if (mods == 3 && code >= 32 && code <= 126) {
+            pending_.clear();
+            pending_ += '\x1b';
+            pending_ += static_cast<char>(code);
+            return SPECIAL;
+          }
+
+          // Alt + Ctrl + control-code (Ctrl+Alt+letter)
+          if (mods == 7 && code >= 1 && code <= 26) {
+            pending_.clear();
+            pending_ += '\x1b';
+            pending_ += static_cast<char>(code);
+            return SPECIAL;
+          }
+
+          // All other CSI-u sequences (Shift+Enter, Alt+Enter, etc.) pass
+          // through unchanged for the application to handle.
+          return SPECIAL;
+        }
         default:
           // Bracketed-paste start/end markers (CSI 200~ / 201~) are consumed
           // silently to toggle the paste state.
