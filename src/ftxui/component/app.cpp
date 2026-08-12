@@ -17,9 +17,11 @@
 #include <iostream>  // for cout, ostream, operator<<, basic_ostream, endl, flush
 #include <map>
 #include <memory>
+#include <mutex>
 #include <stack>  // for stack
 #include <string>
 #include <string_view>
+#include <tuple>  // for ignore
 #include <thread>  // for thread, sleep_for
 #include <tuple>   // for _Swallow_assign, ignore
 #include <type_traits>
@@ -147,7 +149,8 @@ struct App::Internal {
   std::string reset_cursor_position_;
 
   std::atomic<bool> quit_{false};
-  bool installed_ = false;
+  // Read by worker-thread TryPost() callers, so it stays atomic.
+  std::atomic<bool> installed_{false};
   bool animation_requested_ = false;
   animation::TimePoint previous_animation_time_;
 
@@ -299,6 +302,14 @@ struct App::Internal {
   void HandleTask(Component component, Task& task);
   bool HandleSelection(bool handled, Event event);
   void Draw(Component component);
+  void NotifyPublicPostAccepted() noexcept;
+  void NotifyDraw(std::chrono::nanoseconds elapsed, bool rendered) noexcept;
+
+  // The enabled flags keep disabled instrumentation to one atomic branch.
+  // Callback copies are protected separately and invoked after unlocking.
+  std::atomic<unsigned int> performance_observer_flags_{0U};
+  std::mutex performance_observer_mutex_;
+  ScreenInteractivePerformanceObserver performance_observer_;
   std::string ResetCursorPosition();
   void RequestCursorPosition(bool force = false);
   void TerminalSend(std::string_view);
@@ -313,6 +324,9 @@ struct App::Internal {
 namespace {
 
 App* g_active_screen = nullptr;  // NOLINT
+
+constexpr unsigned int kPerformancePublicPost = 1U << 0U;
+constexpr unsigned int kPerformanceDraw = 1U << 1U;
 
 std::stack<Closure> on_exit_functions;  // NOLINT
 
@@ -1064,9 +1078,28 @@ bool App::Internal::HandleSelection(bool handled, Event event) {
 }
 
 void App::Internal::Draw(Component component) {
+  const bool observe_draw =
+      (performance_observer_flags_.load(std::memory_order_acquire) &
+       kPerformanceDraw) != 0U;
   if (frame_valid_) {
+    if (observe_draw) {
+      NotifyDraw(std::chrono::nanoseconds::zero(), false);
+    }
     return;
   }
+  const auto draw_started =
+      observe_draw ? std::chrono::steady_clock::now()
+                   : std::chrono::steady_clock::time_point{};
+  const auto notify_rendered_draw =
+      [this, observe_draw, draw_started] {
+        if (!observe_draw) {
+          return;
+        }
+        NotifyDraw(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - draw_started),
+            true);
+      };
   auto document = component->Render();
   int dimx = 0;
   int dimy = 0;
@@ -1171,6 +1204,7 @@ void App::Internal::Draw(Component component) {
     public_->Clear();
     frame_valid_ = true;
     frame_count_++;
+    notify_rendered_draw();
     return;
   }
 
@@ -1207,6 +1241,7 @@ void App::Internal::Draw(Component component) {
   public_->Clear();
   frame_valid_ = true;
   frame_count_++;
+  notify_rendered_draw();
 }
 
 std::string App::Internal::ResetCursorPosition() {
@@ -1625,24 +1660,94 @@ Closure App::ExitLoopClosure() {
   return [this] { Exit(); };
 }
 
-void App::Post(Task task) {
-  internal_->task_runner.PostTask([this, task = std::move(task)]() mutable {
-    if (internal_->component_) {
-      internal_->HandleTask(internal_->component_, task);
-      return;
-    }
+void App::SetPerformanceObserver(
+    ScreenInteractivePerformanceObserver observer) {
+  unsigned int flags = 0U;
+  if (observer.on_public_post_accepted) {
+    flags |= kPerformancePublicPost;
+  }
+  if (observer.on_draw) {
+    flags |= kPerformanceDraw;
+  }
+  {
+    std::scoped_lock lock(internal_->performance_observer_mutex_);
+    internal_->performance_observer_ = std::move(observer);
+  }
+  internal_->performance_observer_flags_.store(
+      flags, std::memory_order_release);
+}
 
-    // If there is no component, we can still execute closures.
-    if (std::holds_alternative<Closure>(task)) {
-      std::get<Closure>(task)();
+void App::Internal::NotifyPublicPostAccepted() noexcept {
+  if ((performance_observer_flags_.load(std::memory_order_acquire) &
+       kPerformancePublicPost) == 0U) {
+    return;
+  }
+  try {
+    std::function<void()> callback;
+    {
+      std::scoped_lock lock(performance_observer_mutex_);
+      callback = performance_observer_.on_public_post_accepted;
     }
-  });
+    if (callback) {
+      callback();
+    }
+  } catch (...) {
+    // Performance observation must never affect task admission.
+  }
+}
+
+void App::Internal::NotifyDraw(std::chrono::nanoseconds elapsed,
+                               bool rendered) noexcept {
+  try {
+    std::function<void(std::chrono::nanoseconds, bool)> callback;
+    {
+      std::scoped_lock lock(performance_observer_mutex_);
+      callback = performance_observer_.on_draw;
+    }
+    if (callback) {
+      callback(elapsed, rendered);
+    }
+  } catch (...) {
+    // Performance observation must never affect rendering or terminal
+    // output.
+  }
+}
+
+bool App::TryPost(Task task) {
+  // Tasks sent toward an inactive screen, or one waiting to become inactive,
+  // are dropped. Notify only after the queue has accepted the task.
+  if (!internal_->installed_.load(std::memory_order_acquire) ||
+      internal_->quit_.load(std::memory_order_acquire)) {
+    return false;
+  }
+  internal_->task_runner.PostTask(
+      [this, task = std::move(task)]() mutable {
+        if (internal_->component_) {
+          internal_->HandleTask(internal_->component_, task);
+          return;
+        }
+
+        // If there is no component, we can still execute closures.
+        if (std::holds_alternative<Closure>(task)) {
+          std::get<Closure>(task)();
+        }
+      });
+  internal_->NotifyPublicPostAccepted();
+  return true;
+}
+
+void App::Post(Task task) {
+  std::ignore = TryPost(std::move(task));
+}
+
+bool App::TryPostEvent(Event event) {
+  return TryPost(Task(std::move(event)));
 }
 
 void App::PostEvent(Event event) {
   // PostEvent is documented as thread safe: go through the mutex-protected
   // task queue. The event_buffer is only safe to use from the main thread.
-  Post(Task(std::move(event)));
+  std::ignore = TryPostEvent(std::move(event));
 }
 
 // static

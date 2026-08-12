@@ -25,6 +25,21 @@ struct Event;
 class Selection;
 class TaskRunner;
 
+/// @brief Optional per-screen callbacks for latency instrumentation.
+///
+/// Callbacks may run on any thread posting a task or on the screen loop thread
+/// drawing a frame. They must remain non-blocking. Exceptions are ignored.
+struct ScreenInteractivePerformanceObserver {
+  /// Called after a public Post/TryPost operation has actually queued a task.
+  std::function<void()> on_public_post_accepted;
+
+  /// Called after a rendered Draw completes, or for a cached Draw skip.
+  ///
+  /// A cached skip reports zero elapsed time and `rendered == false`.
+  std::function<void(std::chrono::nanoseconds elapsed, bool rendered)>
+      on_draw;
+};
+
 /// @brief App is a class that manages the application lifecycle.
 /// It is responsible for initializing the terminal, running the main loop,
 /// and cleaning up on exit.
@@ -131,6 +146,16 @@ class FTXUI_EXPORT(COMPONENT) App : public Screen {
 
   // Post tasks to be executed by the loop.
 
+  /// @brief Try to add a task to the main loop.
+  /// @param task Task to enqueue.
+  /// @return True only when the screen was active and accepted the task.
+  bool TryPost(Task task);
+
+  /// @brief Try to add an event to the main loop.
+  /// @param event Event to enqueue.
+  /// @return True only when the screen was active and accepted the event.
+  bool TryPostEvent(Event event);
+
   /// @brief Add a task to the main loop.
   /// It will be executed later, after every other scheduled tasks.
   void Post(Task task);
@@ -138,6 +163,13 @@ class FTXUI_EXPORT(COMPONENT) App : public Screen {
   /// @brief Add an event to the main loop.
   /// It will be executed later, after every other scheduled events.
   void PostEvent(Event event);
+
+  /// @brief Replace the optional per-screen performance observer.
+  /// @param observer Callbacks copied for concurrent notification.
+  ///
+  /// Callback invocation never holds the observer mutex.
+  void SetPerformanceObserver(
+      ScreenInteractivePerformanceObserver observer);
 
   /// @brief Add a task to the main loop.
   /// It will be executed later, after every other scheduled tasks.
