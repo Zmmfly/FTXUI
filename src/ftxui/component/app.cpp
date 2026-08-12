@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>  // for fileno, stdin
 #include <ftxui/component/app.hpp>
+#include <ftxui/component/fullscreen_presenter.hpp>
 #include <ftxui/component/task.hpp>  // for Task, Closure, AnimationTask
 #include <ftxui/screen/screen.hpp>  // for Cell, Screen::Cursor, Screen, Screen::Cursor::Hidden
 #include <functional>        // for function
@@ -115,6 +116,10 @@ struct App::Internal {
   std::uint64_t frame_count_ = 0;
   bool mouse_captured = false;
   bool previous_frame_resized_ = false;
+
+  // Rows retained by the fullscreen differential presenter; all other App
+  // modes keep upstream behavior.
+  std::vector<std::string> previous_frame_lines_;
 
   bool frame_valid_ = false;
 
@@ -1023,12 +1028,18 @@ void App::Internal::Draw(Component component) {
 
   const bool resized =
       frame_count_ == 0 || (dimx != public_->dimx_) || (dimy != public_->dimy_);
-  TerminalSend(ResetCursorPosition());
+  const bool use_differential_presenter =
+      dimension_ == AppDimension::Fullscreen && use_alternative_screen_;
+  if (!use_differential_presenter) {
+    TerminalSend(ResetCursorPosition());
+  }
 
   if (frame_count_ != 0) {
     // Reset the cursor position to the lower left corner to start drawing the
     // new frame.
-    public_->ResetPosition(output_buffer, resized);
+    if (!use_differential_presenter) {
+      public_->ResetPosition(output_buffer, resized);
+    }
 
     // If the terminal width decrease, the terminal emulator will start wrapping
     // lines and make the display dirty. We should clear it completely.
@@ -1064,6 +1075,36 @@ void App::Internal::Draw(Component component) {
                          selection_data_.start_x, selection_data_.start_y,  //
                          selection_data_.end_x, selection_data_.end_y);
   Render(*public_, document.get(), *selection_);
+
+  if (use_differential_presenter) {
+    auto current_frame_lines =
+        detail::SplitFullscreenRows(public_->ToString());
+    const auto output = detail::PresentFullscreenRows(
+        previous_frame_lines_,
+        current_frame_lines,
+        public_->dimx_,
+        public_->dimy_,
+        public_->cursor_.x,
+        public_->cursor_.y,
+        public_->cursor_.shape,
+        resized || previous_frame_lines_.empty());
+    TerminalSend(output);
+    TerminalFlush();
+
+    previous_frame_lines_ = std::move(current_frame_lines);
+    set_cursor_position_.clear();
+    if (public_->dimx_ > 0 && public_->dimy_ > 0) {
+      reset_cursor_position_ = "\x1B[" +
+          std::to_string(public_->dimy_) + ";" +
+          std::to_string(public_->dimx_) + "H";
+    } else {
+      reset_cursor_position_.clear();
+    }
+    public_->Clear();
+    frame_valid_ = true;
+    frame_count_++;
+    return;
+  }
 
   // Set cursor position for user using tools to insert CJK characters.
   {
