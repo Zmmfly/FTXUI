@@ -698,6 +698,23 @@ void ScreenInteractive::Install() {
 
 #endif
 
+  // Enable xterm modifyOtherKeys mode 2 so modified keys (Shift+Enter,
+  // Alt+Enter, etc.) emit distinguishable CSI-u or modifyOtherKeys sequences
+  // instead of the bare CR. Terminals without this private-mode support
+  // ignore the sequence harmlessly.
+  std::cout << "\x1b[>4;2m" << std::flush;
+  on_exit_functions.emplace([] {
+    std::cout << "\x1b[>4m" << std::flush;
+  });
+
+  // Enable bracketed-paste mode so terminals wrap pasted content (and
+  // bracketed-paste key bindings) in ESC[200~ ... ESC[201~ markers. The
+  // parser then treats enclosed newlines as literal text rather than Return.
+  std::cout << "\x1b[?2004h" << std::flush;
+  on_exit_functions.emplace([] {
+    std::cout << "\x1b[?2004l" << std::flush;
+  });
+
   auto enable = [&](const std::vector<DECMode>& parameters) {
     std::cout << Set(parameters);
     on_exit_functions.emplace([=] { std::cout << Reset(parameters); });
