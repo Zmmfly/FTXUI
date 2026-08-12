@@ -64,6 +64,47 @@
 
 namespace ftxui {
 
+// File-scope flag controlled by App::SetKeylogEnabled(). Declared before the
+// platform blocks so SetKeylogEnabled compiles on every platform; only the
+// POSIX FetchTerminalEvents path consumes it.
+static std::atomic<bool> g_keylog_enabled{false};
+
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+namespace {
+
+// Optional raw-key debug log, enabled via App::SetKeylogEnabled(). The
+// library does not choose an application-specific path; callers opt in
+// explicitly through the FTXUI_KEYLOG_PATH environment variable. The sink
+// opens lazily on first use and stays open for the process lifetime.
+void MaybeKeylogRead(const char* data, std::size_t size) {
+  if (!g_keylog_enabled.load(std::memory_order_relaxed)) {
+    return;
+  }
+  static FILE* keylog = [] {
+    const char* keylog_path = std::getenv("FTXUI_KEYLOG_PATH");
+    FILE* opened = (keylog_path && *keylog_path)
+                       ? std::fopen(keylog_path, "a")
+                       : nullptr;
+    if (opened) {
+      std::fprintf(opened, "=== FTXUI PID %d ===\n", getpid());
+      std::fflush(opened);
+    }
+    return opened;
+  }();
+  if (!keylog) {
+    return;
+  }
+  for (std::size_t i = 0; i < size; ++i) {
+    std::fprintf(keylog, "%02x ",
+                 static_cast<unsigned char>(data[i]));
+  }
+  std::fprintf(keylog, "\n");
+  std::fflush(keylog);
+}
+
+}  // namespace
+#endif
+
 enum class AppDimension {
   FitComponent,
   Fixed,
@@ -1468,6 +1509,7 @@ size_t App::Internal::FetchTerminalEvents() {
   if (l <= 0) {
     return 0;
   }
+  MaybeKeylogRead(out.data(), static_cast<std::size_t>(l));
 
   // Convert the chars to events.
   for (ssize_t i = 0; i < l; ++i) {
@@ -1555,6 +1597,10 @@ App App::TerminalOutput() {
 
 void App::TrackMouse(bool enable) {
   internal_->track_mouse_ = enable;
+}
+
+void App::SetKeylogEnabled(bool enabled) {
+  g_keylog_enabled.store(enabled);
 }
 
 void App::HandlePipedInput(bool enable) {

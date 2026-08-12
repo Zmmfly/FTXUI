@@ -80,6 +80,13 @@ class FTXUI_EXPORT(COMPONENT) App : public Screen {
   /// @note This must be called before calling `App::Loop`.
   void TrackMouse(bool enable = true);
 
+  /// @brief Enable raw key-read logging for TUI debugging.
+  ///
+  /// When enabled, each POSIX input read() is appended in hexadecimal to the
+  /// file named by the FTXUI_KEYLOG_PATH environment variable. Disabled by
+  /// default and has no effect on other platform listeners.
+  static void SetKeylogEnabled(bool enabled);
+
   /// @brief Enable or disable automatic piped input handling.
   /// When enabled, FTXUI will detect piped input and redirect stdin from
   /// /dev/tty for keyboard input, allowing applications to read piped data
