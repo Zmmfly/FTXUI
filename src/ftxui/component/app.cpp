@@ -672,6 +672,20 @@ void App::Internal::Install() {
   TerminalSend("\x1b[>4;2m");
   on_exit_functions.emplace([this] { TerminalSend("\x1b[>4m"); });
 
+  // Enable the Kitty keyboard protocol (CSI-u disambiguate mode, flag 1) so
+  // modern terminals that ignore modifyOtherKeys — GNOME Terminal/VTE,
+  // Windows Terminal, Alacritty, kitty, WezTerm, Konsole, etc. — also emit
+  // distinguishable CSI-u sequences for modified keys like Shift+Enter.
+  // The parser translates unmodified CSI-u keys (Enter, Tab, Esc, Ctrl+letter,
+  // Alt+letter) back to their traditional byte representations so existing
+  // event handling continues to work; modified keys (Shift+Enter, etc.) pass
+  // through as SPECIAL events for the application to intercept.
+  // Terminals without Kitty support ignore the push sequence harmlessly.
+  TerminalSend("\x1b[>1u");
+  on_exit_functions.emplace([this] {
+    TerminalSend("\x1b[<u");  // Pop all enhancement levels.
+  });
+
   // Enable bracketed-paste mode so terminals wrap pasted content (and
   // bracketed-paste key bindings) in ESC[200~ ... ESC[201~ markers. The
   // parser then treats enclosed newlines as literal text rather than Return.
