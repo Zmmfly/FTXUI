@@ -67,6 +67,8 @@ class TerminalInputParser {
   int timeout_ = 0;
   std::string pending_;
   bool in_bracketed_paste_ = false;
+  // Tracks the previous paste byte for CRLF -> LF normalization.
+  bool paste_saw_cr_ = false;
 };
 
 }  // namespace ftxui

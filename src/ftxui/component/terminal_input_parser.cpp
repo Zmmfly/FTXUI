@@ -178,6 +178,22 @@ TerminalInputParser::Output TerminalInputParser::Parse() {
     // Inside a bracketed paste, control characters (including newline) are
     // literal text rather than command keys.
     if (in_bracketed_paste_) {
+      // Windows Terminal (and others) paste multi-line text with CR or CRLF
+      // line endings, but Input only breaks lines on LF. A raw CR would
+      // collapse the paste into one visual line, so normalize CR / CRLF / LF
+      // to a single LF while inside the paste bracket.
+      const unsigned char c = Current();
+      if (c == '\r') {
+        pending_.back() = '\n';  // CR -> LF
+        paste_saw_cr_ = true;
+        return CHARACTER;
+      }
+      if (c == '\n' && paste_saw_cr_) {
+        pending_.clear();  // swallow the LF of a CRLF pair
+        paste_saw_cr_ = false;
+        return DROP;
+      }
+      paste_saw_cr_ = false;
       return CHARACTER;
     }
     return SPECIAL;
@@ -385,10 +401,12 @@ TerminalInputParser::Output TerminalInputParser::ParseCSI() {
           if (Current() == '~') {
             if (arguments.size() == 1 && arguments[0] == 200) {
               in_bracketed_paste_ = true;
+              paste_saw_cr_ = false;
               return DROP;
             }
             if (arguments.size() == 1 && arguments[0] == 201) {
               in_bracketed_paste_ = false;
+              paste_saw_cr_ = false;
               return DROP;
             }
           }
