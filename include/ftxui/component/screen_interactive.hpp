@@ -11,6 +11,7 @@
 #include <string>                        // for string
 #include <thread>                        // for thread
 #include <variant>                       // for variant
+#include <vector>                        // for vector
 
 #include "ftxui/component/animation.hpp"       // for TimePoint
 #include "ftxui/component/captured_mouse.hpp"  // for CapturedMouse
@@ -115,6 +116,9 @@ class ScreenInteractive : public Screen {
 
   std::string set_cursor_position;
   std::string reset_cursor_position;
+  // Serialized rows retained only by the local fullscreen differential
+  // presenter. Other ScreenInteractive modes keep upstream behavior.
+  std::vector<std::string> previous_frame_lines_;
 
   std::atomic<bool> quit_{false};
   std::thread event_listener_;

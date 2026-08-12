@@ -27,6 +27,7 @@
 #include "ftxui/component/captured_mouse.hpp"  // for CapturedMouse, CapturedMouseInterface
 #include "ftxui/component/component_base.hpp"  // for ComponentBase
 #include "ftxui/component/event.hpp"           // for Event
+#include "ftxui/component/fullscreen_presenter.hpp"
 #include "ftxui/component/loop.hpp"            // for Loop
 #include "ftxui/component/receiver.hpp"  // for ReceiverImpl, Sender, MakeReceiver, SenderImpl, Receiver
 #include "ftxui/component/terminal_input_parser.hpp"  // for TerminalInputParser
@@ -815,7 +816,7 @@ void ScreenInteractive::HandleTask(Component component, Task& task) {
         RecordSignal(SIGTSTP);
       }
 #endif
-      
+
       frame_valid_ = false;
       return;
     }
@@ -931,8 +932,12 @@ void ScreenInteractive::Draw(Component component) {
   }
 
   const bool resized = (dimx != dimx_) || (dimy != dimy_);
-  ResetCursorPosition();
-  std::cout << ResetPosition(/*clear=*/resized);
+  const bool use_differential_presenter =
+      dimension_ == Dimension::Fullscreen && use_alternative_screen_;
+  if (!use_differential_presenter) {
+    ResetCursorPosition();
+    std::cout << ResetPosition(/*clear=*/resized);
+  }
 
   // If the terminal width decrease, the terminal emulator will start wrapping
   // lines and make the display dirty. We should clear it completely.
@@ -981,6 +986,34 @@ void ScreenInteractive::Draw(Component component) {
                          selection_data_.start_x, selection_data_.start_y,  //
                          selection_data_.end_x, selection_data_.end_y);
   Render(*this, document.get(), *selection_);
+
+  if (use_differential_presenter) {
+    auto current_frame_lines = detail::SplitFullscreenRows(ToString());
+    const auto output = detail::PresentFullscreenRows(
+        previous_frame_lines_,
+        current_frame_lines,
+        dimx_,
+        dimy_,
+        cursor_.x,
+        cursor_.y,
+        cursor_.shape,
+        resized || previous_frame_lines_.empty());
+    std::cout << output;
+    Flush();
+
+    previous_frame_lines_ = std::move(current_frame_lines);
+    set_cursor_position.clear();
+    if (dimx_ > 0 && dimy_ > 0) {
+      reset_cursor_position =
+          "\x1B[" + std::to_string(dimy_) + ";" +
+          std::to_string(dimx_) + "H";
+    } else {
+      reset_cursor_position.clear();
+    }
+    Clear();
+    frame_valid_ = true;
+    return;
+  }
 
   // Set cursor position for user using tools to insert CJK characters.
   {
