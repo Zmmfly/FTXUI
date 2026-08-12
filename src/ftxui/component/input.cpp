@@ -565,11 +565,11 @@ class InputBase : public ComponentBase, public InputOption {
   bool OnEvent(Event event) override {
     cursor_position() = util::clamp(cursor_position(), 0, (int)content->size());
 
-    if (event == Event::Return) {
-      return HandleReturn();
-    }
     if (event.is_character()) {
       return HandleCharacter(event.character());
+    }
+    if (event == Event::Return) {
+      return HandleReturn();
     }
     if (event.is_mouse()) {
       return HandleMouse(event);

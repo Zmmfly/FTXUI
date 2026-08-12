@@ -89,6 +89,7 @@ class TerminalInputParser {
   int position_ = -1;
   int timeout_ = 0;
   std::string pending_;
+  bool in_bracketed_paste_ = false;
 };
 
 }  // namespace ftxui

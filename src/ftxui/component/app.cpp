@@ -665,6 +665,19 @@ void App::Internal::Install() {
 
 #endif
 
+  // Enable xterm modifyOtherKeys mode 2 so modified keys (Shift+Enter,
+  // Alt+Enter, etc.) emit distinguishable CSI-u or modifyOtherKeys sequences
+  // instead of the bare CR. Terminals without this private-mode support
+  // ignore the sequence harmlessly.
+  TerminalSend("\x1b[>4;2m");
+  on_exit_functions.emplace([this] { TerminalSend("\x1b[>4m"); });
+
+  // Enable bracketed-paste mode so terminals wrap pasted content (and
+  // bracketed-paste key bindings) in ESC[200~ ... ESC[201~ markers. The
+  // parser then treats enclosed newlines as literal text rather than Return.
+  TerminalSend("\x1b[?2004h");
+  on_exit_functions.emplace([this] { TerminalSend("\x1b[?2004l"); });
+
   auto enable = [&](const std::vector<DECMode>& parameters) {
     TerminalSend(Set(parameters));
     on_exit_functions.emplace(

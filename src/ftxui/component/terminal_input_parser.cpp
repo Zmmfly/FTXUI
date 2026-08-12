@@ -199,6 +199,11 @@ TerminalInputParser::Output TerminalInputParser::Parse() {
   }
 
   if (Current() < 32) {  // C0 NOLINT
+    // Inside a bracketed paste, control characters (including newline) are
+    // literal text rather than command keys.
+    if (in_bracketed_paste_) {
+      return CHARACTER;
+    }
     return SPECIAL;
   }
 
@@ -439,6 +444,18 @@ TerminalInputParser::Output TerminalInputParser::ParseCSI() {
           return ParseDeviceAttributes(altered_greater, altered_question,
                                        std::move(arguments));
         default:
+          // Bracketed-paste start/end markers (CSI 200~ / 201~) are consumed
+          // silently to toggle the paste state.
+          if (Current() == '~') {
+            if (arguments.size() == 1 && arguments[0] == 200) {
+              in_bracketed_paste_ = true;
+              return DROP;
+            }
+            if (arguments.size() == 1 && arguments[0] == 201) {
+              in_bracketed_paste_ = false;
+              return DROP;
+            }
+          }
           return SPECIAL;
       }
     }
