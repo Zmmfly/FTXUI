@@ -181,6 +181,8 @@ struct FTXUI_EXPORT(COMPONENT) InputOption {
   std::function<Element(InputState)> transform;
   Ref<bool> password = false;  ///< Obscure the input content using '*'.
   Ref<bool> multiline = true;  ///< Whether the input can be multiline.
+  Ref<bool> wrap_text = false; ///< Soft-wrap overlong lines to the frame
+                               ///< width instead of scrolling horizontally.
   Ref<bool> insert = true;     ///< Insert or overtype character mode.
 
   /// Called when the content changes.

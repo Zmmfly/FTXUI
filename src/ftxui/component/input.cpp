@@ -51,6 +51,80 @@ size_t GlyphWidth(std::string_view input, size_t iter) {
   return 1;
 }
 
+// Soft-wrap a single logical line (no embedded '\n') into visual-line byte
+// ranges [start, end) so that every visual line's display width stays within
+// |max_width| cells. Full-width glyphs are never split: when one would
+// overflow the remaining width it starts a new visual line. |max_width| <= 0
+// disables wrapping and returns the whole line as a single range, which keeps
+// the original horizontal-scroll behavior intact.
+std::vector<std::pair<size_t, size_t>> WrapLineGlyphs(const std::string& line,
+                                                      int max_width) {
+  std::vector<std::pair<size_t, size_t>> ranges;
+  if (max_width <= 0) {
+    ranges.emplace_back(0, line.size());
+    return ranges;
+  }
+  size_t start = 0;
+  int width = 0;
+  size_t iter = 0;
+  while (iter < line.size()) {
+    const int glyph_width = static_cast<int>(GlyphWidth(line, iter));
+    const size_t next = GlyphNext(line, iter);
+    // Starting a fresh visual line at width == 0 is always allowed, so a
+    // glyph wider than the budget still lands on its own line.
+    if (width + glyph_width > max_width && width > 0) {
+      ranges.emplace_back(start, iter);
+      start = iter;
+      width = 0;
+    }
+    width += glyph_width;
+    iter = next;
+  }
+  ranges.emplace_back(start, line.size());
+  return ranges;
+}
+
+// Location of the cursor within the soft-wrap layout: the byte offset (in
+// |content|) of the visual line that owns the cursor, and the cursor's
+// display column measured from that visual line's start.
+struct VisualCursorPlace {
+  size_t visual_start;
+  int column;
+};
+
+// Resolve the cursor's visual line for the given |content|/|cursor|/wrap
+// budget. A cursor sitting exactly on a wrap boundary attaches to the earlier
+// visual line's end (matching how OnRender places the cursor element).
+VisualCursorPlace LocateVisualCursor(const std::string& content,
+                                     size_t cursor,
+                                     int wrap_width) {
+  size_t line_start = cursor;
+  while (line_start > 0 && content[line_start - 1] != '\n') {
+    --line_start;
+  }
+  size_t line_end = cursor;
+  while (line_end < content.size() && content[line_end] != '\n') {
+    ++line_end;
+  }
+  const std::string line = content.substr(line_start, line_end - line_start);
+  const size_t local_cursor = cursor - line_start;
+  const auto ranges = WrapLineGlyphs(line, wrap_width);
+  size_t chosen = ranges.size() - 1;
+  for (size_t r = 0; r < ranges.size(); ++r) {
+    if (local_cursor <= ranges[r].second) {
+      chosen = r;
+      break;
+    }
+  }
+  const size_t visual_start_local = ranges[chosen].first;
+  int column = 0;
+  for (size_t it = visual_start_local; it < local_cursor;) {
+    column += static_cast<int>(GlyphWidth(line, it));
+    it = GlyphNext(line, it);
+  }
+  return {line_start + visual_start_local, column};
+}
+
 bool IsWordCodePoint(uint32_t codepoint) {
   switch (CodepointToWordBreakProperty(codepoint)) {
     case WordBreakProperty::ALetter:
@@ -136,6 +210,20 @@ class InputBase : public ComponentBase, public InputOption {
 
     cursor_position() = util::clamp(cursor_position(), 0, (int)content->size());
 
+    // Refresh the soft-wrap budget from the previous frame's box. The frame
+    // fills box_ during Render, so OnRender observes last frame's geometry;
+    // the first frame (or the one right after a resize) falls back to no
+    // wrapping and self-corrects on the next frame. One cell is reserved so
+    // the trailing cursor placeholder never pushes a visual line past the
+    // frame width and re-triggers horizontal scrolling.
+    wrap_width_ = 0;
+    if (wrap_text()) {
+      const int available = box_.x_max - box_.x_min + 1;
+      if (available > 1) {
+        wrap_width_ = available - 1;
+      }
+    }
+
     // Find the line and index of the cursor.
     int cursor_line = 0;
     int cursor_char_index = cursor_position();
@@ -152,44 +240,70 @@ class InputBase : public ComponentBase, public InputOption {
       elements.push_back(text("") | focused);
     }
 
+    // Lay out every logical line, optionally split into width-bounded visual
+    // lines. With wrapping disabled (wrap_width_ <= 0) each logical line yields
+    // a single visual line and the original horizontal-scroll behavior is
+    // preserved; with wrapping enabled every visual line fits the frame, so
+    // the frame only ever scrolls vertically.
+    int visual_line_index = 0;
+    bool cursor_placed = false;
     elements.reserve(lines.size());
     for (size_t i = 0; i < lines.size(); ++i) {
       const std::string& line = lines[i];
+      const bool cursor_on_logical_line = int(i) == cursor_line;
 
-      // This is not the cursor line.
-      if (int(i) != cursor_line) {
-        elements.push_back(Text(line));
-        continue;
+      for (const auto& range : WrapLineGlyphs(line, wrap_width_)) {
+        const size_t vstart = range.first;
+        const size_t vend = range.second;
+
+        // The cursor attaches to the first visual line whose end reaches it,
+        // so a cursor on a wrap boundary sits at the earlier line's end.
+        const bool cursor_here = cursor_on_logical_line && !cursor_placed &&
+                                 cursor_char_index <= static_cast<int>(vend);
+        if (!cursor_here) {
+          elements.push_back(Text(line.substr(vstart, vend - vstart)));
+          ++visual_line_index;
+          continue;
+        }
+
+        cursor_placed = true;
+
+        Element cursor_element;
+        if (cursor_char_index >= static_cast<int>(vend) ||
+            cursor_char_index >= static_cast<int>(line.size())) {
+          // Cursor at the end of this visual line.
+          cursor_element = hbox({
+              Text(line.substr(vstart, vend - vstart)),
+              text(" ") | focused | reflect(cursor_box_),
+          });
+        } else {
+          // Cursor in the middle of this visual line.
+          const int glyph_end =
+              static_cast<int>(GlyphNext(line, cursor_char_index));
+          cursor_element = hbox({
+              Text(line.substr(vstart, static_cast<size_t>(cursor_char_index) -
+                                           vstart)),
+              Text(line.substr(static_cast<size_t>(cursor_char_index),
+                               static_cast<size_t>(glyph_end) -
+                                   static_cast<size_t>(cursor_char_index))) |
+                  focused | reflect(cursor_box_),
+              Text(line.substr(static_cast<size_t>(glyph_end), vend - glyph_end)),
+          });
+        }
+        // Without wrapping the cursor line stretches to fill the frame (the
+        // original behavior); with wrapping every visual line is width-bound
+        // so the trailing cursor cell never triggers horizontal scrolling.
+        if (wrap_width_ <= 0) {
+          cursor_element = std::move(cursor_element) | xflex;
+        }
+        elements.push_back(std::move(cursor_element));
+        ++visual_line_index;
       }
-
-      // The cursor is at the end of the line.
-      const std::string cursor_cell = is_focused ? " " : "";
-      if (cursor_char_index >= (int)line.size()) {
-        elements.push_back(
-            hbox({
-                Text(line),
-                text(cursor_cell) | focused | reflect(cursor_box_),
-            }) |
-            xflex);
-        continue;
-      }
-
-      // The cursor is on this line.
-      const int glyph_start = cursor_char_index;
-      const int glyph_end = static_cast<int>(GlyphNext(line, glyph_start));
-      const std::string part_before_cursor = line.substr(0, glyph_start);
-      const std::string part_at_cursor =
-          line.substr(glyph_start, glyph_end - glyph_start);
-      const std::string part_after_cursor = line.substr(glyph_end);
-      auto element = hbox({
-                         Text(part_before_cursor),
-                         Text(part_at_cursor) | focused | reflect(cursor_box_),
-                         Text(part_after_cursor),
-                     }) |
-                     xflex;
-      elements.push_back(element);
     }
 
+    // Upstream v6 passed the cursor line to vbox as a second argument that
+    // its generic Merge silently discarded; v7 removed that no-op overload,
+    // so the call keeps the plain single-argument form.
     auto element = vbox(std::move(elements)) | frame;
     return transform_func({
                std::move(element), hovered_, is_focused,
@@ -305,6 +419,32 @@ class InputBase : public ComponentBase, public InputOption {
       return false;
     }
 
+    // Soft-wrap: step across visual lines rather than whole logical lines.
+    if (wrap_width_ > 0) {
+      const VisualCursorPlace place = LocateVisualCursor(
+          content(), cursor_position(), wrap_width_);
+      const int target_column = place.column;
+      const size_t vstart = place.visual_start;
+      if (vstart == 0) {
+        cursor_position() = 0;
+        return true;
+      }
+      size_t previous = GlyphPrevious(content(), vstart);
+      // Step over the newline that separates two logical lines.
+      if (content()[previous] == '\n') {
+        if (previous == 0) {
+          cursor_position() = 0;
+          return true;
+        }
+        previous = GlyphPrevious(content(), previous);
+      }
+      const VisualCursorPlace prev_place =
+          LocateVisualCursor(content(), previous, wrap_width_);
+      cursor_position() = static_cast<int>(prev_place.visual_start);
+      MoveCursorColumn(target_column);
+      return true;
+    }
+
     const size_t columns = CursorColumn();
 
     // Move cursor at the beginning of 2 lines above.
@@ -338,6 +478,39 @@ class InputBase : public ComponentBase, public InputOption {
   bool HandleArrowDown() {
     if (cursor_position() == (int)content->size()) {
       return false;
+    }
+
+    // Soft-wrap: step across visual lines rather than whole logical lines.
+    if (wrap_width_ > 0) {
+      const VisualCursorPlace place = LocateVisualCursor(
+          content(), cursor_position(), wrap_width_);
+      const int target_column = place.column;
+      // Walk right from the current visual-line start until the width budget
+      // is exhausted; the next glyph begins the following visual line.
+      size_t it = place.visual_start;
+      int width = 0;
+      while (it < content().size() && content()[it] != '\n') {
+        const int gw = static_cast<int>(GlyphWidth(content(), it));
+        if (width + gw > wrap_width_) {
+          break;
+        }
+        width += gw;
+        it = GlyphNext(content(), it);
+      }
+      if (it >= content().size()) {
+        cursor_position() = static_cast<int>(content().size());
+        return true;
+      }
+      if (content()[it] == '\n') {
+        it = GlyphNext(content(), it);
+      }
+      if (it >= content().size()) {
+        cursor_position() = static_cast<int>(content().size());
+        return true;
+      }
+      cursor_position() = static_cast<int>(it);
+      MoveCursorColumn(target_column);
+      return true;
     }
 
     const size_t columns = CursorColumn();
@@ -508,6 +681,58 @@ class InputBase : public ComponentBase, public InputOption {
       return true;
     }
 
+    // Soft-wrap: map the click onto the visual-line layout instead of the
+    // logical-line layout, so a click lands on the wrapped row the user sees.
+    if (wrap_width_ > 0) {
+      std::vector<std::pair<size_t, size_t>> vlines;
+      size_t base = 0;
+      for (const auto& logical : Split(*content)) {
+        for (const auto& r : WrapLineGlyphs(logical, wrap_width_)) {
+          vlines.emplace_back(base + r.first, base + r.second);
+        }
+        base += logical.size() + 1;
+      }
+      if (vlines.empty()) {
+        vlines.emplace_back(0, 0);
+      }
+
+      // The cursor box anchors a visible visual line; offset from it by the
+      // click's vertical delta to pick the target visual line.
+      int cursor_vline = static_cast<int>(vlines.size()) - 1;
+      for (size_t i = 0; i < vlines.size(); ++i) {
+        if (cursor_position() <= static_cast<int>(vlines[i].second)) {
+          cursor_vline = static_cast<int>(i);
+          break;
+        }
+      }
+      int target_vline =
+          cursor_vline + (event.mouse().y - cursor_box_.y_min);
+      target_vline =
+          util::clamp(target_vline, 0, static_cast<int>(vlines.size()) - 1);
+
+      const auto& vl = vlines[target_vline];
+      const std::string seg =
+          content().substr(vl.first, vl.second - vl.first);
+      const int vl_width = static_cast<int>(string_width(seg));
+      int target_column = event.mouse().x - box_.x_min;
+      target_column = util::clamp(target_column, 0, vl_width);
+
+      cursor_position() = static_cast<int>(vl.first);
+      int col = target_column;
+      while (col > 0 &&
+             cursor_position() < static_cast<int>(content->size()) &&
+             content()[cursor_position()] != '\n') {
+        col -= static_cast<int>(GlyphWidth(content(), cursor_position()));
+        if (col < 0) {
+          break;  // Keep a full-width glyph whole; stop just before it.
+        }
+        cursor_position() =
+            static_cast<int>(GlyphNext(content(), cursor_position()));
+      }
+      on_change();
+      return true;
+    }
+
     // Find the line and index of the cursor.
     std::vector<std::string> lines = SplitLines(*content);
     int cursor_line = 0;
@@ -575,6 +800,11 @@ class InputBase : public ComponentBase, public InputOption {
 
   Box box_;
   Box cursor_box_;
+
+  // Cached soft-wrap width (frame cells reserved for text) from the previous
+  // frame; 0 disables wrapping. Refreshed every OnRender from box_, so the
+  // first frame and the frame following a resize fall back to no wrapping.
+  int wrap_width_ = 0;
 };
 
 }  // namespace
