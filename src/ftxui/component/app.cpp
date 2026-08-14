@@ -489,6 +489,8 @@ void RestoreTerminalEmergency() {
 #else
   if (g_has_original_termios && g_tty_fd >= 0) {
     const char restore_seq[] =
+        "\x1b[?2026l"  // End a partially written synchronized frame first,
+                       // so the sequences below take effect immediately.
         "\x1b[?25h"    // Show cursor.
         "\x1b[?1049l"  // Switch to normal screen buffer.
         "\x1b[?1000l"  // Disable normal mouse tracking.
@@ -496,6 +498,10 @@ void RestoreTerminalEmergency() {
         "\x1b[?1003l"  // Disable all motion mouse tracking.
         "\x1b[?1006l"  // Disable SGR mouse tracking.
         "\x1b[?1015l"  // Disable Urxvt mouse tracking.
+        "\x1b[?2004l"  // Disable bracketed-paste mode.
+        "\x1b[<u"      // Pop Kitty keyboard enhancement levels.
+        "\x1b[>4m"     // Reset modifyOtherKeys mode.
+        "\x1b[0m"       // Reset character attributes.
         "\x1b[?7h";    // Enable line wrapping.
     std::ignore = write(STDOUT_FILENO, restore_seq, sizeof(restore_seq) - 1);
     tcsetattr(g_tty_fd, TCSANOW, &g_original_termios);
@@ -1645,6 +1651,11 @@ void App::HandlePipedInput(bool enable) {
 // static
 App* App::Active() {
   return g_active_screen;
+}
+
+// static
+void App::EmergencyRestoreTerminal() noexcept {
+  RestoreTerminalEmergency();
 }
 
 void App::Loop(Component component) {

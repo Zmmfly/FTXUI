@@ -115,6 +115,13 @@ class FTXUI_EXPORT(COMPONENT) App : public Screen {
   /// @brief Return the currently active app, nullptr if none.
   static App* Active();
 
+  /// @brief Best-effort terminal restoration for abnormal termination.
+  ///
+  /// Uses only pre-captured terminal state and fixed control sequences, is
+  /// safe to call repeatedly, and is also driven by FTXUI's fatal-signal
+  /// handlers, including the path used by std::terminate.
+  static void EmergencyRestoreTerminal() noexcept;
+
   // Start/Stop the main loop.
 
   /// @brief Execute the main loop.
