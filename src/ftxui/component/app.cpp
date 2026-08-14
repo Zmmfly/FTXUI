@@ -1492,6 +1492,17 @@ size_t App::Internal::FetchTerminalEvents() {
           continue;
         }
         const wchar_t wc = key_event.uChar.UnicodeChar;
+        if (wc == L'\0') {
+          // Windows console KEY_EVENT records collapse modifier-only presses
+          // into U+0000; only an actual Ctrl+Space maps to CtrlSpace.
+          const bool control_pressed =
+              (key_event.dwControlKeyState &
+               (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
+          if (key_event.wVirtualKeyCode == VK_SPACE && control_pressed) {
+            public_->Post(Event::CtrlSpace);
+          }
+          continue;
+        }
         wstring += wc;
         if (wc >= 0xd800 && wc <= 0xdbff) {
           // Wait for the Low Surrogate to arrive in the next record.

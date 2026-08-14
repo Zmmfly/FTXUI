@@ -305,6 +305,7 @@ std::string Event::DebugString() const {
       {Event::PageDown, "Event::PageDown"},
 
       // --- Control keys ---
+      {Event::CtrlSpace, "Event::CtrlSpace"},
       {Event::CtrlA, "Event::CtrlA"},
       {Event::CtrlB, "Event::CtrlB"},
       {Event::CtrlC, "Event::CtrlC"},
@@ -565,6 +566,9 @@ const Event Event::X = Event::Character("X");
 const Event Event::Y = Event::Character("Y");
 const Event Event::Z = Event::Character("Z");
 
+// Use the Kitty CSI-u spelling as the canonical representation so a legacy
+// NUL byte can remain distinct from the internal Event::Custom NUL sentinel.
+const Event Event::CtrlSpace = Event::Special("\x1B[32;5u");
 const Event Event::CtrlA = Event::Special("\x01");
 const Event Event::CtrlB = Event::Special("\x02");
 const Event Event::CtrlC = Event::Special("\x03");

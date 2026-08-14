@@ -95,6 +95,7 @@ struct FTXUI_EXPORT(COMPONENT) Event {
   static const Event F12;
 
   // --- Control keys ---
+  static const Event CtrlSpace;
   static const Event a;
   static const Event A;
   static const Event CtrlA;

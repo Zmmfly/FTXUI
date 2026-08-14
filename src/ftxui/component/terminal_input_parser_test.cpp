@@ -338,7 +338,9 @@ TEST(Event, Control) {
       EXPECT_TRUE(received_events.empty());
     } else {
       EXPECT_EQ(1u, received_events.size());
-      EXPECT_EQ(received_events[0], Event::Special({test.input}));
+      EXPECT_EQ(received_events[0],
+                test.input == '\0' ? Event::CtrlSpace
+                                    : Event::Special({test.input}));
     }
   }
 }
