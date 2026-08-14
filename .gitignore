@@ -32,6 +32,8 @@ out/
 !meson.build
 !meson.options
 
+!xmake.lua
+
 # .github directory:
 !.github/**/*.yaml
 !.github/**/*.yml
