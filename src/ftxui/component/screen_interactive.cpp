@@ -223,6 +223,17 @@ void EventListener(std::atomic<bool>* quit, Sender<Task> out) {
           // ignore UP key events
           if (key_event.bKeyDown == FALSE)
             continue;
+          if (key_event.uChar.UnicodeChar == L'\0') {
+            const bool control_pressed =
+                (key_event.dwControlKeyState &
+                 (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
+            if (key_event.wVirtualKeyCode == VK_SPACE && control_pressed) {
+              out->Send(Event::CtrlSpace);
+            }
+            // Modifier-only and other non-character KEY_EVENT records also
+            // carry U+0000. They are not terminal Ctrl+Space bytes.
+            continue;
+          }
           std::wstring wstring;
           wstring += key_event.uChar.UnicodeChar;
           for (auto it : to_string(wstring)) {

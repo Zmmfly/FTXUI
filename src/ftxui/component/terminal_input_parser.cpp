@@ -136,6 +136,15 @@ void TerminalInputParser::Send(TerminalInputParser::Output output) {
       return;
 
     case SPECIAL: {
+      if (pending_.size() == 1 && pending_.front() == '\0') {
+        // Terminals traditionally encode Ctrl+Space as NUL, while FTXUI also
+        // uses a directly posted NUL Event::Custom for refresh and resize.
+        // Canonicalize only terminal input so applications can distinguish
+        // the physical key from internal work notifications.
+        out_->Send(Event::CtrlSpace);
+        pending_.clear();
+        return;
+      }
       auto it = g_uniformize.find(pending_);
       if (it != g_uniformize.end()) {
         pending_ = it->second;

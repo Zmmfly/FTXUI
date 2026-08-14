@@ -367,7 +367,9 @@ TEST(Event, Control) {
       EXPECT_FALSE(event_receiver->Receive(&received));
     } else {
       EXPECT_TRUE(event_receiver->Receive(&received));
-      EXPECT_EQ(std::get<Event>(received), Event::Special({test.input}));
+      EXPECT_EQ(std::get<Event>(received),
+                test.input == '\0' ? Event::CtrlSpace
+                                    : Event::Special({test.input}));
     }
   }
 }

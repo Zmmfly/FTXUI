@@ -64,6 +64,7 @@ struct Event {
   static const Event F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12;
 
   // --- Control keys ---
+  static const Event CtrlSpace;
   static const Event a, A, CtrlA, AltA, CtrlAltA;
   static const Event b, B, CtrlB, AltB, CtrlAltB;
   static const Event c, C, CtrlC, AltC, CtrlAltC;
