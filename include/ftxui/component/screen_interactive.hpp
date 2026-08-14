@@ -68,6 +68,13 @@ class ScreenInteractive : public Screen {
   // Return the currently active screen, nullptr if none.
   static ScreenInteractive* Active();
 
+  /// @brief Best-effort restoration for abnormal process termination.
+  ///
+  /// This uses only pre-captured terminal state and fixed control sequences.
+  /// It is safe to call repeatedly and is also used by FTXUI's fatal-signal
+  /// handlers, including the SIGABRT path used by std::terminate.
+  static void EmergencyRestoreTerminal() noexcept;
+
   // Start/Stop the main loop.
   void Loop(Component);
   void Exit();

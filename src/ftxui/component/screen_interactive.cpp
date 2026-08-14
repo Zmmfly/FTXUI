@@ -5,16 +5,18 @@
 #include <algorithm>  // for copy, max, min
 #include <array>      // for array
 #include <atomic>
+#include <cerrno>  // for errno, EINTR
 #include <chrono>  // for operator-, milliseconds, operator>=, duration, common_type<>::type, time_point
 #include <csignal>  // for signal, SIGTSTP, SIGABRT, SIGWINCH, raise, SIGFPE, SIGILL, SIGINT, SIGSEGV, SIGTERM, __sighandler_t, size_t
 #include <cstdint>
 #include <cstdio>                    // for fileno, stdin
-#include <cstdlib>                   // for getenv
+#include <cstdlib>                   // for getenv, _Exit
 #include <ftxui/component/task.hpp>  // for Task, Closure, AnimationTask
 #include <ftxui/screen/screen.hpp>  // for Pixel, Screen::Cursor, Screen, Screen::Cursor::Hidden
 #include <functional>        // for function
 #include <initializer_list>  // for initializer_list
 #include <iostream>  // for cout, ostream, operator<<, basic_ostream, endl, flush
+#include <limits>
 #include <memory>
 #include <stack>  // for stack
 #include <string>
@@ -78,6 +80,104 @@ void RequestAnimationFrame() {
 namespace {
 
 ScreenInteractive* g_active_screen = nullptr;  // NOLINT
+
+// The emergency path must not depend on iostreams, heap allocation, locks, or
+// Loop destruction. State is captured before raw mode is installed and remains
+// valid until the normal OnExit stack has restored every terminal feature.
+std::atomic<std::sig_atomic_t> g_emergency_terminal_active{0};
+std::atomic<std::sig_atomic_t> g_emergency_uses_alternate_screen{0};
+
+#if defined(_WIN32)
+HANDLE g_emergency_stdout_handle = INVALID_HANDLE_VALUE;
+HANDLE g_emergency_stdin_handle = INVALID_HANDLE_VALUE;
+DWORD g_emergency_stdout_mode = 0;
+DWORD g_emergency_stdin_mode = 0;
+std::atomic<std::sig_atomic_t> g_emergency_console_modes_valid{0};
+#else
+termios g_emergency_original_termios{};
+std::atomic<std::sig_atomic_t> g_emergency_termios_valid{0};
+#endif
+static_assert(std::atomic<std::sig_atomic_t>::is_always_lock_free);
+
+constexpr char kEmergencyResetPrefix[] =
+    "\x1B[?2026l"  // End a partially written synchronized frame.
+    "\x1B[?1006l"
+    "\x1B[?1015l"
+    "\x1B[?1003l"
+    "\x1B[?1000l"
+    "\x1B[?7h";
+constexpr char kEmergencyLeaveAlternateScreen[] = "\x1B[?1049l";
+constexpr char kEmergencyResetSuffix[] =
+    "\x1B[?2004l"
+    "\x1B[<u"
+    "\x1B[>4m"
+    "\x1B[0m"
+    "\x1B[?25h";
+
+#if !defined(_WIN32)
+void WriteEmergencyBytes(const char* data, std::size_t size) noexcept {
+  while (size != 0U) {
+    const auto written = ::write(STDOUT_FILENO, data, size);
+    if (written > 0) {
+      data += written;
+      size -= static_cast<std::size_t>(written);
+      continue;
+    }
+    if (written < 0 && errno == EINTR) {
+      continue;
+    }
+    return;
+  }
+}
+#else
+void WriteEmergencyBytes(const char* data, std::size_t size) noexcept {
+  if (g_emergency_stdout_handle == nullptr ||
+      g_emergency_stdout_handle == INVALID_HANDLE_VALUE) {
+    return;
+  }
+  while (size != 0U) {
+    DWORD written = 0;
+    const auto chunk = static_cast<DWORD>(
+        std::min<std::size_t>(size, std::numeric_limits<DWORD>::max()));
+    if (!WriteFile(g_emergency_stdout_handle, data, chunk, &written, nullptr) ||
+        written == 0) {
+      return;
+    }
+    data += written;
+    size -= written;
+  }
+}
+#endif
+
+void EmergencyRestoreTerminalState() noexcept {
+  if (g_emergency_terminal_active.load(std::memory_order_acquire) == 0) {
+    return;
+  }
+  WriteEmergencyBytes(kEmergencyResetPrefix,
+                      sizeof(kEmergencyResetPrefix) - 1U);
+  if (g_emergency_uses_alternate_screen.load(
+          std::memory_order_relaxed) != 0) {
+    WriteEmergencyBytes(kEmergencyLeaveAlternateScreen,
+                        sizeof(kEmergencyLeaveAlternateScreen) - 1U);
+  }
+  WriteEmergencyBytes(kEmergencyResetSuffix,
+                      sizeof(kEmergencyResetSuffix) - 1U);
+#if defined(_WIN32)
+  if (g_emergency_console_modes_valid.load(
+          std::memory_order_relaxed) != 0) {
+    SetConsoleMode(g_emergency_stdout_handle, g_emergency_stdout_mode);
+    SetConsoleMode(g_emergency_stdin_handle, g_emergency_stdin_mode);
+  }
+#else
+  if (g_emergency_termios_valid.load(
+          std::memory_order_relaxed) != 0) {
+    // tcsetattr and write are async-signal-safe POSIX operations. Together
+    // they restore both the PTY line discipline and emulator-private modes.
+    (void)::tcsetattr(STDIN_FILENO, TCSANOW,
+                      &g_emergency_original_termios);
+  }
+#endif
+}
 
 constexpr unsigned int kPerformancePublicPost = 1U << 0U;
 constexpr unsigned int kPerformanceDraw = 1U << 1U;
@@ -238,20 +338,54 @@ std::atomic<int> g_signal_exit_count = 0;  // NOLINT
 std::atomic<int> g_signal_stop_count = 0;    // NOLINT
 std::atomic<int> g_signal_resize_count = 0;  // NOLINT
 #endif
+static_assert(std::atomic<int>::is_always_lock_free);
 
-// Async signal safe function
+[[noreturn]] void ReraiseFatalSignal(int signal) noexcept {
+#if defined(_WIN32)
+  (void)std::signal(signal, SIG_DFL);
+  (void)std::raise(signal);
+  std::_Exit(128 + signal);
+#else
+  struct sigaction action {};
+  action.sa_handler = SIG_DFL;
+  ::sigemptyset(&action.sa_mask);
+  (void)::sigaction(signal, &action, nullptr);
+  // The current instance stays blocked until this handler returns. Queue a
+  // second instance after installing SIG_DFL and then unblock it explicitly
+  // so the process preserves its original fatal signal status.
+  sigset_t unblocked;
+  ::sigemptyset(&unblocked);
+  ::sigaddset(&unblocked, signal);
+  (void)::sigprocmask(SIG_UNBLOCK, &unblocked, nullptr);
+  (void)::raise(signal);
+  ::_exit(128 + signal);
+#endif
+}
+
+// Async-signal-safe POSIX handler.
 void RecordSignal(int signal) {
+  const int saved_errno = errno;
   switch (signal) {
     case SIGABRT:
     case SIGFPE:
     case SIGILL:
-    case SIGINT:
     case SIGSEGV:
+      EmergencyRestoreTerminalState();
+      ReraiseFatalSignal(signal);
+      return;
+
+    case SIGINT:
     case SIGTERM:
       g_signal_exit_count++;
       break;
 
 #if !defined(_WIN32)
+    case SIGHUP:
+    case SIGQUIT:
+      EmergencyRestoreTerminalState();
+      ReraiseFatalSignal(signal);
+      return;
+
     case SIGTSTP:  // NOLINT
       g_signal_stop_count++;
       break;
@@ -264,6 +398,7 @@ void RecordSignal(int signal) {
     default:
       break;
   }
+  errno = saved_errno;
 }
 
 void ExecuteSignalHandlers() {
@@ -286,9 +421,22 @@ void ExecuteSignalHandlers() {
 }
 
 void InstallSignalHandler(int sig) {
+#if defined(_WIN32)
   auto old_signal_handler = std::signal(sig, RecordSignal);
   on_exit_functions.emplace(
       [=] { std::ignore = std::signal(sig, old_signal_handler); });
+#else
+  struct sigaction action {};
+  struct sigaction previous {};
+  action.sa_handler = RecordSignal;
+  ::sigemptyset(&action.sa_mask);
+  action.sa_flags = SA_RESTART;
+  if (::sigaction(sig, &action, &previous) != 0) {
+    return;
+  }
+  on_exit_functions.emplace(
+      [=] { std::ignore = ::sigaction(sig, &previous, nullptr); });
+#endif
 }
 
 // CSI: Control Sequence Introducer
@@ -703,6 +851,11 @@ ScreenInteractive* ScreenInteractive::Active() {
   return g_active_screen;
 }
 
+// static
+void ScreenInteractive::EmergencyRestoreTerminal() noexcept {
+  EmergencyRestoreTerminalState();
+}
+
 // private
 void ScreenInteractive::Install() {
   frame_valid_ = false;
@@ -728,11 +881,46 @@ void ScreenInteractive::Install() {
     std::cout << "\033[" + std::to_string(cursor_reset_shape_) + " q";
   });
 
+  // Capture the pre-raw state before installing any handler. A fatal signal
+  // can then restore a fully published POD snapshot without consulting the
+  // normal callback stack.
+#if defined(_WIN32)
+  g_emergency_stdout_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+  g_emergency_stdin_handle = GetStdHandle(STD_INPUT_HANDLE);
+  if (GetConsoleMode(g_emergency_stdout_handle,
+                     &g_emergency_stdout_mode) &&
+      GetConsoleMode(g_emergency_stdin_handle,
+                     &g_emergency_stdin_mode)) {
+    g_emergency_console_modes_valid.store(1, std::memory_order_relaxed);
+  } else {
+    g_emergency_console_modes_valid.store(0, std::memory_order_relaxed);
+  }
+#else
+  if (::tcgetattr(STDIN_FILENO, &g_emergency_original_termios) == 0) {
+    g_emergency_termios_valid.store(1, std::memory_order_relaxed);
+  } else {
+    g_emergency_termios_valid.store(0, std::memory_order_relaxed);
+  }
+#endif
+  g_emergency_uses_alternate_screen.store(
+      use_alternative_screen_ ? 1 : 0,
+      std::memory_order_relaxed);
+  g_emergency_terminal_active.store(1, std::memory_order_release);
+  on_exit_functions.emplace([] {
+    g_emergency_terminal_active.store(0, std::memory_order_release);
+    g_emergency_uses_alternate_screen.store(0, std::memory_order_relaxed);
+  });
+
   // Install signal handlers to restore the terminal state on exit. The default
   // signal handlers are restored on exit.
   for (const int signal : {SIGTERM, SIGSEGV, SIGINT, SIGILL, SIGABRT, SIGFPE}) {
     InstallSignalHandler(signal);
   }
+#if !defined(_WIN32)
+  for (const int signal : {SIGHUP, SIGQUIT}) {
+    InstallSignalHandler(signal);
+  }
+#endif
 
 // Save the old terminal configuration and restore it on exit.
 #if defined(_WIN32)
@@ -744,6 +932,10 @@ void ScreenInteractive::Install() {
   DWORD in_mode = 0;
   GetConsoleMode(stdout_handle, &out_mode);
   GetConsoleMode(stdin_handle, &in_mode);
+  on_exit_functions.emplace([] {
+    g_emergency_console_modes_valid.store(
+        0, std::memory_order_relaxed);
+  });
   on_exit_functions.push([=] { SetConsoleMode(stdout_handle, out_mode); });
   on_exit_functions.push([=] { SetConsoleMode(stdin_handle, in_mode); });
 
@@ -770,10 +962,14 @@ void ScreenInteractive::Install() {
     InstallSignalHandler(signal);
   }
 
-  struct termios terminal;  // NOLINT
-  tcgetattr(STDIN_FILENO, &terminal);
+  struct termios terminal = g_emergency_original_termios;  // NOLINT
   on_exit_functions.emplace(
-      [=] { tcsetattr(STDIN_FILENO, TCSANOW, &terminal); });
+      [=] {
+        if (g_emergency_termios_valid.load(
+                std::memory_order_relaxed) != 0) {
+          tcsetattr(STDIN_FILENO, TCSANOW, &terminal);
+        }
+      });
 
   // Enabling raw terminal input mode
   terminal.c_iflag &= ~IGNBRK;  // Disable ignoring break condition
@@ -949,7 +1145,10 @@ void ScreenInteractive::HandleTask(Component component, Task& task) {
       handled = HandleSelection(handled, arg);
 
       if (arg == Event::CtrlC && (!handled || force_handle_ctrl_c_)) {
-        RecordSignal(SIGABRT);
+        // This is an in-band FTXUI exit request, not an operating-system
+        // SIGABRT. Fatal signals restore and re-raise from RecordSignal(); a
+        // Ctrl+C event must instead let the Loop unwind through Uninstall().
+        g_signal_exit_count++;
       }
 
 #if !defined(_WIN32)
