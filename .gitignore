@@ -24,6 +24,7 @@ out/
 !BUILD.bazel
 !MODULE.bazel
 !.bazelrc
+!xmake.lua
 
 # .github directory:
 !.github/**/*.yaml
