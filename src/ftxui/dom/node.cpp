@@ -57,6 +57,17 @@ void Node::Select(Selection& selection) {
 
 /// @brief Display an element on a ftxui::Screen.
 void Node::Render(Screen& screen) {
+  // Pixels written outside the stencil are discarded by PixelAt, so a box
+  // fully outside the stencil can skip its whole subtree without changing
+  // the output. Scrolled-out transcript rows dominate per-frame render cost
+  // otherwise: every text node would decode its UTF-8 content only to write
+  // into the discarded pixel.
+  if (box_.y_min > screen.stencil.y_max ||
+      box_.y_max < screen.stencil.y_min ||
+      box_.x_min > screen.stencil.x_max ||
+      box_.x_max < screen.stencil.x_min) {
+    return;
+  }
   for (auto& child : children_) {
     child->Render(screen);
   }
