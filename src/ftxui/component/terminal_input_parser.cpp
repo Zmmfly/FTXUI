@@ -145,7 +145,7 @@ void TerminalInputParser::Send(TerminalInputParser::Output output) {
         // uses a directly posted NUL Event::Custom for refresh and resize.
         // Canonicalize only terminal input so applications can distinguish
         // the physical key from internal work notifications.
-        out_->Send(Event::CtrlSpace);
+        out_(Event::CtrlSpace);
         pending_.clear();
         return;
       }

@@ -1439,7 +1439,7 @@ std::vector<std::string> Utf8ToGlyphs(std::string_view input) {
   return out;
 }
 
-void Utf8ToGlyphsInto(const std::string& input,
+void Utf8ToGlyphsInto(std::string_view input,
                       std::vector<std::string>& out) {
   out.clear();
   out.reserve(input.size());

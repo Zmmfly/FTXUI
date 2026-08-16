@@ -686,7 +686,7 @@ class InputBase : public ComponentBase, public InputOption {
     if (wrap_width_ > 0) {
       std::vector<std::pair<size_t, size_t>> vlines;
       size_t base = 0;
-      for (const auto& logical : Split(*content)) {
+      for (const auto& logical : SplitLines(*content)) {
         for (const auto& r : WrapLineGlyphs(logical, wrap_width_)) {
           vlines.emplace_back(base + r.first, base + r.second);
         }

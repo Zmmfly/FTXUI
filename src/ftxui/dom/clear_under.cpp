@@ -21,10 +21,10 @@ class ClearUnder : public NodeDecorator {
 
   void Render(Screen& screen) override {
     const Box clipped = Box::Intersection(box_, screen.stencil);
-      for (int y = clipped.y_min; y <= clipped.y_max; ++y) {
+    for (int y = clipped.y_min; y <= clipped.y_max; ++y) {
       for (int x = clipped.x_min; x <= clipped.x_max; ++x) {
-        screen.CellAt(x, y) = Pixel();
-        screen.CellAt(x, y).character = " ";  // Consider the pixel written.
+        screen.CellAt(x, y) = Cell();
+        screen.CellAt(x, y).character = " ";  // Consider the cell written.
       }
     }
     Node::Render(screen);
