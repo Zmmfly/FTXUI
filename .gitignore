@@ -109,3 +109,6 @@ build_meson/
 iwyu/
 examples_modules/
 examples_ftxui_hpp/
+
+# Local CMake test-build scratch
+build-tests/

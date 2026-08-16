@@ -447,8 +447,10 @@ TEST(Event, Special) {
       {str("\x1B[5~"), Event::PageUp},
       {str("\x1B[6~"), Event::PageDown},
 
-      // Custom:
-      {{0}, Event::Custom},
+      // Custom: a lone terminal NUL is canonicalized to CtrlSpace so
+      // applications can distinguish the physical key from FTXUI's internal
+      // NUL-based notifications (which are posted directly, not parsed).
+      {{0}, Event::CtrlSpace},
   };
 
   for (auto test : kTestCase) {
