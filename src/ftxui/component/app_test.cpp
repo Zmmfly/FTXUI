@@ -247,6 +247,9 @@ TEST(App, FixedSizeInitialFrame) {
   std::string expected;
   // Install the App.
   expected += "\0"s;           // Flush stdout.
+  expected += "\x1B[>4;2m"s;   // Enable modifyOtherKeys mode 2.
+  expected += "\x1B[>1u"s;     // Push Kitty keyboard disambiguation.
+  expected += "\x1B[?2004h"s;  // Enable bracketed-paste mode.
   expected += "\x1B[?7l"s;     // Disable line wrapping.
   expected += "\x1B[?1000h"s;  // Enable mouse tracking.
   expected += "\x1B[?1003h"s;  // Enable mouse motion tracking.
@@ -275,6 +278,9 @@ TEST(App, FixedSizeInitialFrame) {
   expected += "\x1B[?1003l"s;  // Disable mouse motion tracking.
   expected += "\x1B[?1000l"s;  // Disable mouse tracking.
   expected += "\x1B[?7h"s;     // Enable line wrapping.
+  expected += "\x1B[?2004l"s;  // Disable bracketed-paste mode.
+  expected += "\x1B[<u"s;      // Pop Kitty keyboard enhancements.
+  expected += "\x1B[>4m"s;     // Reset modifyOtherKeys mode.
   expected += "\0"s;           // Flush stdout.
 
   // Skip one line to avoid the prompt to be printed over the last drawing.

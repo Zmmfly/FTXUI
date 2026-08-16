@@ -790,10 +790,13 @@ void App::Internal::Install() {
 
   quit_ = false;
 
-  PostAnimationTask();
-
+  // Mark installed before posting the first animation task: TryPost() drops
+  // tasks while the screen is not installed, and the initial animation task
+  // is what triggers the first frame in RunOnce().
   installed_ = true;
   g_terminal_is_raw = true;
+
+  PostAnimationTask();
 }
 
 void App::Internal::Uninstall() {
