@@ -27,7 +27,8 @@ target("ftxui")
 
     for _, file in ipairs(os.files(path.join(
         os.scriptdir(), "src/ftxui/**.cpp"))) do
-        local name = path.basename(file)
+        -- path.filename keeps the extension (path.basename strips it).
+        local name = path.filename(file)
         -- v7 ships a stale duplicate loop.cpp whose definitions live in
         -- app.cpp; upstream's CMake source list excludes it, and so do we.
         if name ~= "loop.cpp" and
