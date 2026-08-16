@@ -725,6 +725,17 @@ void App::Internal::Install() {
 
 #endif
 
+  // The cursor restore is registered before every mode-enable push below so
+  // the LIFO exit stack emits it last: DEC resets, then the fcode mode
+  // resets, then the cursor, then the final flush (a downstream protocol
+  // contract verified by fcode's blink-protocol gate).
+  on_exit_functions.emplace([this] {
+    TerminalSend("\033[?25h");  // Enable cursor.
+    if (is_stdout_a_tty_) {
+      TerminalSend("\033[" + std::to_string(cursor_reset_shape_) + " q");
+    }
+  });
+
   // Enable xterm modifyOtherKeys mode 2 so modified keys (Shift+Enter,
   // Alt+Enter, etc.) emit distinguishable CSI-u or modifyOtherKeys sequences
   // instead of the bare CR. Terminals without this private-mode support
@@ -1426,12 +1437,9 @@ void App::Internal::InstallTerminalInfo() {
 
   Terminal::SetQuirks(quirks);
 
-  on_exit_functions.emplace([this] {
-    TerminalSend("\033[?25h");  // Enable cursor.
-    if (is_stdout_a_tty_) {
-      TerminalSend("\033[" + std::to_string(cursor_reset_shape_) + " q");
-    }
-  });
+  // The cursor-restore exit handler was hoisted into Install() ahead of the
+  // mode-enable pushes: the LIFO exit stack must emit it after the DEC and
+  // fcode mode resets, not before them.
 }
 
 void App::Internal::Signal(int signal) {

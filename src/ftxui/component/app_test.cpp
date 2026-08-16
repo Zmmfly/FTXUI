@@ -272,7 +272,6 @@ TEST(App, FixedSizeInitialFrame) {
 
   // Uninstall the App.
   expected += "\x1B[1C"s;      // Move cursor right one character.
-  expected += "\x1B[?25h"s;    // Show cursor.
   expected += "\x1B[?1006l"s;  // Disable SGR mouse tracking.
   expected += "\x1B[?1015l"s;  // Disable mouse wheel tracking.
   expected += "\x1B[?1003l"s;  // Disable mouse motion tracking.
@@ -281,6 +280,7 @@ TEST(App, FixedSizeInitialFrame) {
   expected += "\x1B[?2004l"s;  // Disable bracketed-paste mode.
   expected += "\x1B[<u"s;      // Pop Kitty keyboard enhancements.
   expected += "\x1B[>4m"s;     // Reset modifyOtherKeys mode.
+  expected += "\x1B[?25h"s;    // Show cursor (restored last on exit).
   expected += "\0"s;           // Flush stdout.
 
   // Skip one line to avoid the prompt to be printed over the last drawing.
