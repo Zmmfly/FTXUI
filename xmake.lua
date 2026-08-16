@@ -28,7 +28,10 @@ target("ftxui")
     for _, file in ipairs(os.files(path.join(
         os.scriptdir(), "src/ftxui/**.cpp"))) do
         local name = path.basename(file)
-        if not name:find("_test", 1, true) and
+        -- v7 ships a stale duplicate loop.cpp whose definitions live in
+        -- app.cpp; upstream's CMake source list excludes it, and so do we.
+        if name ~= "loop.cpp" and
+            not name:find("_test", 1, true) and
             not name:find("fuzzer", 1, true) then
             add_files(file)
         end
