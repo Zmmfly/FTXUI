@@ -491,18 +491,17 @@ void RestoreTerminalEmergency() {
     const char restore_seq[] =
         "\x1b[?2026l"  // End a partially written synchronized frame first,
                        // so the sequences below take effect immediately.
-        "\x1b[?25h"    // Show cursor.
-        "\x1b[?1049l"  // Switch to normal screen buffer.
-        "\x1b[?1000l"  // Disable normal mouse tracking.
-        "\x1b[?1002l"  // Disable button event mouse tracking.
-        "\x1b[?1003l"  // Disable all motion mouse tracking.
         "\x1b[?1006l"  // Disable SGR mouse tracking.
         "\x1b[?1015l"  // Disable Urxvt mouse tracking.
+        "\x1b[?1003l"  // Disable all motion mouse tracking.
+        "\x1b[?1000l"  // Disable normal mouse tracking.
+        "\x1b[?7h"     // Enable line wrapping.
+        "\x1b[?1049l"  // Switch to normal screen buffer.
         "\x1b[?2004l"  // Disable bracketed-paste mode.
         "\x1b[<u"      // Pop Kitty keyboard enhancement levels.
         "\x1b[>4m"     // Reset modifyOtherKeys mode.
         "\x1b[0m"       // Reset character attributes.
-        "\x1b[?7h";    // Enable line wrapping.
+        "\x1b[?25h";   // Show cursor.
     std::ignore = write(STDOUT_FILENO, restore_seq, sizeof(restore_seq) - 1);
     tcsetattr(g_tty_fd, TCSANOW, &g_original_termios);
   }
@@ -525,6 +524,12 @@ void RecordSignal(int signal) {
     case SIGBUS:
     // Bad system call.
     case SIGSYS:
+    // Terminal quit (e.g. Ctrl-\, produces core dump).
+    case SIGQUIT:
+    // Hangup detected on controlling terminal or death of controlling
+    // process. A terminal application must restore the terminal and die
+    // with the original signal instead of unwinding into a normal exit.
+    case SIGHUP:
 #endif
     {
       RestoreTerminalEmergency();
@@ -536,12 +541,6 @@ void RecordSignal(int signal) {
     case SIGINT:
     // Termination request.
     case SIGTERM:
-#if !defined(_WIN32)
-    // Terminal quit (e.g. Ctrl-\, produces core dump).
-    case SIGQUIT:
-    // Hangup detected on controlling terminal or death of controlling process.
-    case SIGHUP:
-#endif
       g_last_signal.store(signal);
       g_signal_exit_count++;
       break;
@@ -1575,7 +1574,15 @@ size_t App::Internal::FetchTerminalEvents() {
 }
 
 void App::Internal::PostAnimationTask() {
-  public_->Post(AnimationTask());
+  // The animation trigger is internal frame machinery: enqueue it directly
+  // so it neither depends on the installed_ admission edge nor notifies the
+  // public-post observer.
+  task_runner.PostTask([this] {
+    if (component_) {
+      Task task = AnimationTask();
+      HandleTask(component_, task);
+    }
+  });
 
   // Repeat the animation task every 15ms. This correspond to a frame rate
   // of around 66fps.
