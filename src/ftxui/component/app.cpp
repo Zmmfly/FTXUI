@@ -795,7 +795,18 @@ void App::Internal::Install() {
   installed_ = true;
   g_terminal_is_raw = true;
 
-  PostAnimationTask();
+  // The initial frame trigger is internal machinery, not a public post:
+  // enqueue it directly so it neither depends on the admission edge nor
+  // notifies the post observer, then arm the delayed chain whose reposts go
+  // through the public path and are observable there.
+  task_runner.PostTask([this] {
+    if (component_) {
+      Task task = AnimationTask();
+      HandleTask(component_, task);
+    }
+  });
+  task_runner.PostDelayedTask([this] { PostAnimationTask(); },
+                              std::chrono::milliseconds(15));
 }
 
 void App::Internal::Uninstall() {
@@ -1578,15 +1589,9 @@ size_t App::Internal::FetchTerminalEvents() {
 }
 
 void App::Internal::PostAnimationTask() {
-  // The animation trigger is internal frame machinery: enqueue it directly
-  // so it neither depends on the installed_ admission edge nor notifies the
-  // public-post observer.
-  task_runner.PostTask([this] {
-    if (component_) {
-      Task task = AnimationTask();
-      HandleTask(component_, task);
-    }
-  });
+  // Frames posted from the delayed chain go through the public post path:
+  // they are subject to admission and observable by the post observer.
+  public_->Post(AnimationTask());
 
   // Repeat the animation task every 15ms. This correspond to a frame rate
   // of around 66fps.
