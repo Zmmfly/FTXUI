@@ -1101,6 +1101,32 @@ constexpr auto g_extend_characters{[]() constexpr {
   return result;
 }()};
 
+// The wide-glyph and combining-glyph tables overlap (some kana voicing
+// marks are both), so check order in the glyph loops is significant and
+// must stay control -> combining -> fullwidth.
+//
+// Compile-time-proven Extend-free ranges let the combining bisearch exit
+// immediately for the ideograph/kana/hangul blocks that dominate terminal
+// transcripts; the ranges below are asserted to contain no Extend interval
+// endpoint, i.e. they lie strictly between table intervals.
+constexpr bool g_extend_free_range(uint32_t first, uint32_t last) {
+  for (const auto& extend : g_extend_characters) {
+    if (first <= extend.last && extend.first <= last) {
+      return false;
+    }
+  }
+  return true;
+}
+static_assert(
+    g_extend_free_range(0x04e00, 0x0a48c),  // NOLINT
+    "extend table drifted into the CJK unified block");
+static_assert(
+    g_extend_free_range(0x0ac00, 0x0d7a3),  // NOLINT
+    "extend table drifted into the Hangul syllable block");
+static_assert(
+    g_extend_free_range(0x0f900, 0x0faff),  // NOLINT
+    "extend table drifted into the CJK compat block");
+
 // Find a codepoint inside a sorted list of Interval.
 template <size_t N>
 bool Bisearch(uint32_t ucs, const std::array<Interval, N>& table) {
@@ -1281,12 +1307,35 @@ bool EatCodePoint(std::wstring_view input,
 }
 
 bool IsCombining(uint32_t ucs) {
+  // Blocks statically proven Extend-free above: ideographs and Hangul
+  // dominate CJK transcripts and skip the bisearch.
+  if ((ucs >= 0x04e00 && ucs <= 0x0a48c) ||  // NOLINT
+      (ucs >= 0x0ac00 && ucs <= 0x0d7a3) ||  // NOLINT
+      (ucs >= 0x0f900 && ucs <= 0x0faff)) {  // NOLINT
+    return false;
+  }
   return Bisearch(ucs, g_extend_characters);
 }
 
 bool IsFullWidth(uint32_t ucs) {
   if (ucs < 0x0300) {  // Quick path: // NOLINT
     return false;
+  }
+
+  // Hot exact entries of g_full_width_characters, checked inline before the
+  // bisearch: CJK punctuation and kana, ideographs, Hangul, and fullwidth
+  // forms cover virtually all wide glyphs in terminal transcripts. These
+  // ranges are verbatim entries of the table, so the fast path can never
+  // diverge from the bisearch verdict.
+  if ((ucs >= 0x03000 && ucs <= 0x0303e) ||  // NOLINT
+      (ucs >= 0x03041 && ucs <= 0x03096) ||  // NOLINT
+      (ucs >= 0x03099 && ucs <= 0x030ff) ||  // NOLINT
+      (ucs >= 0x03250 && ucs <= 0x04dbf) ||  // NOLINT
+      (ucs >= 0x04e00 && ucs <= 0x0a48c) ||  // NOLINT
+      (ucs >= 0x0ac00 && ucs <= 0x0d7a3) ||  // NOLINT
+      (ucs >= 0x0f900 && ucs <= 0x0faff) ||  // NOLINT
+      (ucs >= 0x0ff01 && ucs <= 0x0ff60)) {  // NOLINT
+    return true;
   }
 
   return Bisearch(ucs, g_full_width_characters);
@@ -1386,6 +1435,13 @@ int string_width(std::string_view input) {
 
 std::vector<std::string> Utf8ToGlyphs(std::string_view input) {
   std::vector<std::string> out;
+  Utf8ToGlyphsInto(input, out);
+  return out;
+}
+
+void Utf8ToGlyphsInto(const std::string& input,
+                      std::vector<std::string>& out) {
+  out.clear();
   out.reserve(input.size());
   size_t start = 0;
   size_t end = 0;
@@ -1423,7 +1479,6 @@ std::vector<std::string> Utf8ToGlyphs(std::string_view input) {
     // Normal characters:
     out.emplace_back(append);
   }
-  return out;
 }
 
 size_t GlyphPrevious(std::string_view input, size_t start) {

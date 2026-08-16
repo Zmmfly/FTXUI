@@ -154,15 +154,17 @@ class LinearGradientColor : public NodeDecorator {
 
     // Project every pixel to get the color.
     if (background_color_) {
-      for (int y = box_.y_min; y <= box_.y_max; ++y) {
-        for (int x = box_.x_min; x <= box_.x_max; ++x) {
+      const Box clipped = Box::Intersection(box_, screen.stencil);
+      for (int y = clipped.y_min; y <= clipped.y_max; ++y) {
+        for (int x = clipped.x_min; x <= clipped.x_max; ++x) {
           const float t = float(x) * dX + float(y) * dY + dZ;
           screen.CellAt(x, y).background_color = Interpolate(gradient_, t);
         }
       }
     } else {
-      for (int y = box_.y_min; y <= box_.y_max; ++y) {
-        for (int x = box_.x_min; x <= box_.x_max; ++x) {
+      const Box clipped = Box::Intersection(box_, screen.stencil);
+      for (int y = clipped.y_min; y <= clipped.y_max; ++y) {
+        for (int x = clipped.x_min; x <= clipped.x_max; ++x) {
           const float t = float(x) * dX + float(y) * dY + dZ;
           screen.CellAt(x, y).foreground_color = Interpolate(gradient_, t);
         }

@@ -33,6 +33,11 @@ FTXUI_EXPORT(SCREEN) int string_width(std::string_view);
 FTXUI_EXPORT(SCREEN)
 std::vector<std::string> Utf8ToGlyphs(std::string_view input);
 
+// Same glyph split as Utf8ToGlyphs, writing into caller-provided storage so
+// repeated decodes (e.g. every frame's text rendering) reuse the vector's
+// capacity instead of allocating a fresh vector and strings per call.
+void Utf8ToGlyphsInto(const std::string& input, std::vector<std::string>& out);
+
 // Map every cells drawn by |input| to their corresponding Glyphs. Half-size
 // Glyphs takes one cell, full-size Glyphs take two cells.
 FTXUI_EXPORT(SCREEN)

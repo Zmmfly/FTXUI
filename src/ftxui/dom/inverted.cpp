@@ -19,8 +19,9 @@ class Inverted : public NodeDecorator {
 
   void Render(Screen& screen) override {
     Node::Render(screen);
-    for (int y = box_.y_min; y <= box_.y_max; ++y) {
-      for (int x = box_.x_min; x <= box_.x_max; ++x) {
+    const Box clipped = Box::Intersection(box_, screen.stencil);
+      for (int y = clipped.y_min; y <= clipped.y_max; ++y) {
+      for (int x = clipped.x_min; x <= clipped.x_max; ++x) {
         screen.CellAt(x, y).inverted ^= true;
       }
     }

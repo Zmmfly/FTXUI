@@ -70,7 +70,25 @@ const Cell& Surface::FastCellAt(int x, int y) const {
 
 /// @brief Clear all the cells from the surface.
 void Surface::Clear() {
-  std::fill(cells_.begin(), cells_.end(), Cell());
+  // Field-wise reset: a screen of 220x50 touches 11k cells per frame, and
+  // resetting fields in place (SSO string length reset, packed flag writes)
+  // is markedly cheaper than assigning a temporary Cell into each one,
+  // which rewrites the whole string payload slot.
+  for (auto& cell : cells_) {
+    cell.character.clear();
+    cell.blink = false;
+    cell.bold = false;
+    cell.dim = false;
+    cell.italic = false;
+    cell.inverted = false;
+    cell.underlined = false;
+    cell.underlined_double = false;
+    cell.strikethrough = false;
+    cell.automerge = false;
+    cell.hyperlink = 0;
+    cell.background_color = Color::Default;
+    cell.foreground_color = Color::Default;
+  }
 }
 
 void Surface::Reserved1() {}
