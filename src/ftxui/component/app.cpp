@@ -993,7 +993,11 @@ void App::Internal::HandleTask(Component component, Task& task) {
       handled = HandleSelection(handled, arg);
 
       if (arg == Event::CtrlC && (!handled || force_handle_ctrl_c_)) {
-        RecordSignal(SIGINT);
+        // This is an in-band exit request, not an operating-system SIGINT:
+        // a real terminal SIGINT arrives through RecordSignal() and is
+        // re-raised after the unwind, while the in-band event must only
+        // request the exit so the Loop unwinds without a final reraise.
+        g_signal_exit_count++;
       }
 
 #if !defined(_WIN32)
