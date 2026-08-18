@@ -37,6 +37,7 @@ struct FTXUI_EXPORT(COMPONENT) Event {
   static Event Character(std::string_view);
   static Event Character(char);
   static Event Character(wchar_t);
+  static Event Paste(std::string_view);
   static Event Special(std::string_view);
   static Event Special(std::initializer_list<char>);
   static Event Mouse(std::string_view, Mouse mouse);
@@ -239,6 +240,7 @@ struct FTXUI_EXPORT(COMPONENT) Event {
 
   bool is_character() const { return type_ == Type::Character; }
   std::string character() const { return input_; }
+  bool is_paste() const { return type_ == Type::Character && from_paste_; }
 
   bool is_mouse() const { return type_ == Type::Mouse; }
   struct Mouse& mouse() { return data_.mouse; }
@@ -283,6 +285,7 @@ struct FTXUI_EXPORT(COMPONENT) Event {
     TerminalCapabilities,
   };
   Type type_ = Type::Unknown;
+  bool from_paste_ = false;
   struct Cursor {
     int x = 0;
     int y = 0;

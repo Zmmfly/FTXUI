@@ -51,6 +51,15 @@ Event Event::Character(wchar_t c) {
   return Event::Character(to_string(std::wstring{c}));
 }
 
+/// @brief A character event originating inside a bracketed paste.
+/// @param input The pasted character sequence.
+// static
+Event Event::Paste(std::string_view input) {
+  Event event = Event::Character(input);
+  event.from_paste_ = true;
+  return event;
+}
+
 /// @brief An event corresponding to a given typed character.
 /// @param input The sequence of character send by the terminal.
 /// @param mouse The mouse state.

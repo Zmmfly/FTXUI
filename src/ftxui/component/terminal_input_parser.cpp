@@ -135,7 +135,8 @@ void TerminalInputParser::Send(TerminalInputParser::Output output) {
       return;
 
     case CHARACTER:
-      out_(Event::Character(std::move(pending_)));
+      out_(in_bracketed_paste_ ? Event::Paste(pending_)
+                               : Event::Character(pending_));
       pending_.clear();
       return;
 
