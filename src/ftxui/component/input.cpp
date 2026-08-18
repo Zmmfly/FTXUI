@@ -534,12 +534,25 @@ class InputBase : public ComponentBase, public InputOption {
   }
 
   bool HandleHome() {
-    cursor_position() = 0;
+    // Move to the start of the current logical line: stop right after the
+    // previous '\n', or at the content start. '\n' is a single-byte ASCII
+    // separator, so a raw byte scan needs no glyph alignment.
+    size_t position = cursor_position();
+    while (position > 0 && content()[position - 1] != '\n') {
+      --position;
+    }
+    cursor_position() = static_cast<int>(position);
     return true;
   }
 
   bool HandleEnd() {
-    cursor_position() = static_cast<int>(content->size());
+    // Move to the end of the current logical line: stop right before the next
+    // '\n', or at the content end. Soft-wrap boundaries are not line ends.
+    size_t position = cursor_position();
+    while (position < content().size() && content()[position] != '\n') {
+      ++position;
+    }
+    cursor_position() = static_cast<int>(position);
     return true;
   }
 
