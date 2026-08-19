@@ -1729,6 +1729,23 @@ void App::Internal::InstallTerminalInfo() {
       safe_getenv("TERM_PROGRAM"), terminal_name_, terminal_emulator_name_,
       terminal_capabilities_);
 
+  if (gnu_screen_session) {
+    // GNU Screen can report the outer emulator's truecolor capability even
+    // though its virtual display does not reliably relay 24-bit SGR. Depending
+    // on the Screen build, that can produce or leave behind an incorrect bright
+    // background. Cap rendering to Screen's advertised palette: dark RGB
+    // surfaces become palette index 235 in 256-color mode, or ANSI black in
+    // the base-palette mode.
+    const auto term = safe_getenv("TERM");
+    const auto screen_color_cap =
+        term.find("256color") != std::string_view::npos
+            ? Terminal::Color::Palette256
+            : Terminal::Color::Palette16;
+    if (color_support > screen_color_cap) {
+      color_support = screen_color_cap;
+    }
+  }
+
   quirks.SetColorSupport(color_support);
 
   const bool is_modern_emulator = (terminal_emulator_name_ != "unknown");
