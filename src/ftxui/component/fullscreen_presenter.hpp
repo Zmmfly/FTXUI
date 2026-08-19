@@ -28,7 +28,8 @@ std::string PresentFullscreenRows(
     int cursor_x,
     int cursor_y,
     Screen::Cursor::Shape cursor_shape,
-    FullscreenPresentMode mode);
+    FullscreenPresentMode mode,
+    bool erase_line_tail = false);
 
 }  // namespace ftxui::detail
 

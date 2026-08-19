@@ -13,6 +13,7 @@ constexpr std::string_view kBeginSynchronizedOutput{"\x1B[?2026h"};
 constexpr std::string_view kEndSynchronizedOutput{"\x1B[?2026l"};
 constexpr std::string_view kHideCursor{"\x1B[?25l"};
 constexpr std::string_view kDisableLineWrap{"\x1B[?7l"};
+constexpr std::string_view kResetStyleAndEraseLineTail{"\x1B[0m\x1B[K"};
 
 std::string CursorPosition(int x, int y, int width, int height) {
   const int bounded_x = std::clamp(x, 0, std::max(width - 1, 0));
@@ -34,6 +35,24 @@ void AppendCursorState(std::string& output,
   }
   output += "\x1B[?25h";
   output += "\x1B[" + std::to_string(static_cast<int>(cursor_shape)) + " q";
+}
+
+void AppendLineTail(std::string& output, bool erase_line_tail) {
+  if (erase_line_tail) {
+    // A guarded GNU Screen canvas stops one cell before the physical right
+    // margin. Erase that reserved cell without printing into it, so Screen's
+    // outer redisplay cannot trigger an eager-wrap + CRLF double advance.
+    output += kResetStyleAndEraseLineTail;
+  }
+}
+
+void AppendRow(std::string& output,
+               std::size_t row,
+               std::string_view content,
+               bool erase_line_tail) {
+  output += "\x1B[" + std::to_string(row + 1) + ";1H";
+  output += content;
+  AppendLineTail(output, erase_line_tail);
 }
 
 }  // namespace
@@ -60,7 +79,8 @@ std::string PresentFullscreenRows(
     int cursor_x,
     int cursor_y,
     Screen::Cursor::Shape cursor_shape,
-    FullscreenPresentMode mode) {
+    FullscreenPresentMode mode,
+    bool erase_line_tail) {
   std::string output;
   output += kBeginSynchronizedOutput;
   // Hiding the cursor also prevents visible cursor sweeps on terminals that
@@ -82,24 +102,23 @@ std::string PresentFullscreenRows(
     // frames. Avoid CRLF: some nested PTY chains apply delayed-wrap semantics
     // differently and can otherwise shift all rows below a full-width line.
     for (std::size_t row = 0; row < current_rows.size(); ++row) {
-      output += "\x1B[" + std::to_string(row + 1) + ";1H";
-      output += current_rows[row];
+      AppendRow(output, row, current_rows[row], erase_line_tail);
     }
   } else if (mode == FullscreenPresentMode::FullClear || row_count_changed) {
     output += "\x1B[2J\x1B[H";
-    for (std::size_t row = 0; row < current_rows.size(); ++row) {
-      if (row != 0) {
-        output += "\x1B[" + std::to_string(row + 1) + ";1H";
-      }
-      output += current_rows[row];
+    if (!current_rows.empty()) {
+      output += current_rows[0];
+      AppendLineTail(output, erase_line_tail);
+    }
+    for (std::size_t row = 1; row < current_rows.size(); ++row) {
+      AppendRow(output, row, current_rows[row], erase_line_tail);
     }
   } else {
     for (std::size_t row = 0; row < current_rows.size(); ++row) {
       if (current_rows[row] == previous_rows[row]) {
         continue;
       }
-      output += "\x1B[" + std::to_string(row + 1) + ";1H";
-      output += current_rows[row];
+      AppendRow(output, row, current_rows[row], erase_line_tail);
     }
   }
 

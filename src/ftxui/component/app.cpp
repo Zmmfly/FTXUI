@@ -1191,6 +1191,11 @@ void App::Internal::Draw(Component component) {
   int dimx = 0;
   int dimy = 0;
   auto terminal = Terminal::Size();
+  const bool gnu_screen_session =
+      dimension_ == AppDimension::Fullscreen &&
+      use_alternative_screen_ && IsGnuScreenSession();
+  const bool gnu_screen_margin_guard =
+      gnu_screen_session && terminal.dimx > 1;
   document->ComputeRequirement();
   switch (dimension_) {
     case AppDimension::Fixed:
@@ -1209,6 +1214,17 @@ void App::Internal::Draw(Component component) {
       dimx = util::clamp(document->requirement().min_x, 0, terminal.dimx);
       dimy = util::clamp(document->requirement().min_y, 0, terminal.dimy);
       break;
+  }
+
+  if (gnu_screen_margin_guard) {
+    // GNU Screen re-encodes child updates for the outer terminal. For a
+    // changed block of rows it writes every physical column followed by CRLF,
+    // regardless of the child's absolute CUP updates and DECAWM setting.
+    // Terminals that wrap eagerly at the right margin therefore advance twice
+    // and leave stale rows behind. Keep one Screen-only guard column so its
+    // outer redisplay never reaches that ambiguous margin; tmux and ordinary
+    // terminals retain their complete width.
+    --dimx;
   }
 
   const bool resized =
@@ -1283,11 +1299,7 @@ void App::Internal::Draw(Component component) {
       // differential updates, using absolute full-row recovery only when a
       // multiplexer framebuffer is invalidated or its window changes size.
       auto present_mode = detail::FullscreenPresentMode::Differential;
-      if (!physical_framebuffer_valid_) {
-        present_mode = IsTerminalMultiplexerSession()
-                           ? detail::FullscreenPresentMode::FullRepaint
-                           : detail::FullscreenPresentMode::FullClear;
-      } else if (resized) {
+      if (!physical_framebuffer_valid_ || resized) {
         present_mode = IsTerminalMultiplexerSession()
                            ? detail::FullscreenPresentMode::FullRepaint
                            : detail::FullscreenPresentMode::FullClear;
@@ -1300,7 +1312,8 @@ void App::Internal::Draw(Component component) {
           public_->cursor_.x,
           public_->cursor_.y,
           public_->cursor_.shape,
-          present_mode);
+          present_mode,
+          gnu_screen_margin_guard);
       TerminalSend(output);
       TerminalFlush();
       physical_framebuffer_valid_ = true;

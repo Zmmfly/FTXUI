@@ -463,7 +463,13 @@ void Screen::ToString(std::string& ss) const {
         if (!previous_fullwidth) {
           UpdateCellStyle(this, ss, *previous_cell_ref, cell);
           previous_cell_ref = &cell;
-          if (cell.character.empty()) {
+          const bool clipped_fullwidth =
+              it + 1 == line_end && cell.character.size() > 1 &&
+              string_width(cell.character) == 2;
+          if (cell.character.empty() || clipped_fullwidth) {
+            // A width-2 glyph cannot start in the final logical cell: emitting
+            // it would exceed the Screen width and can consume a terminal
+            // margin guard. Render a styled blank instead of half a glyph.
             ss += ' ';
           } else {
             ss += cell.character;
