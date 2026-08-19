@@ -25,6 +25,7 @@ bool EatCodePoint(std::wstring_view input,
                   uint32_t* ucs);
 
 FTXUI_EXPORT(SCREEN) bool IsCombining(uint32_t ucs);
+FTXUI_EXPORT(SCREEN) bool IsAmbiguousWidth(uint32_t ucs);
 FTXUI_EXPORT(SCREEN) bool IsFullWidth(uint32_t ucs);
 FTXUI_EXPORT(SCREEN) bool IsControl(uint32_t ucs);
 

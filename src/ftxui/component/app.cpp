@@ -40,6 +40,8 @@
 #include "ftxui/component/terminal_input_parser.hpp"  // for TerminalInputParser
 #include "ftxui/dom/node.hpp"                         // for Node, Render
 #include "ftxui/screen/cell.hpp"                      // for Cell
+#include "ftxui/screen/string.hpp"                    // for string_width
+#include "ftxui/screen/string_internal.hpp"  // for EatCodePoint, IsAmbiguousWidth, IsCombining
 #include "ftxui/screen/terminal.hpp"                  // for Dimensions, Size
 #include "ftxui/screen/util.hpp"                      // for util::clamp
 #include "ftxui/util/autoreset.hpp"                   // for AutoReset
@@ -163,6 +165,9 @@ struct App::Internal {
       Screen::Cursor::Hidden;
   bool previous_frame_cursor_valid_ = false;
   bool physical_framebuffer_valid_ = false;
+  std::array<std::uint32_t, 2>
+      gnu_screen_width_probe_replies_to_discard_{};
+  bool gnu_screen_ambiguous_width_fallback_ = false;
 
   bool frame_valid_ = false;
 
@@ -367,6 +372,125 @@ bool IsTerminalMultiplexerSession() {
     return true;
   }
   return IsTerminalFamily(std::getenv("TERM"), "tmux");
+}
+
+char AmbiguousWidthAsciiFallback(uint32_t codepoint) {
+  switch (codepoint) {
+    case 0x2010:  // Hyphen.
+    case 0x2013:  // En dash.
+    case 0x2014:  // Em dash.
+    case 0x2015:  // Horizontal bar.
+      return '-';
+    case 0x2022:  // Bullet.
+    case 0x2026:  // Horizontal ellipsis.
+    case 0x00b7:  // Middle dot.
+      return '.';
+    case 0x203a:  // Single right-pointing angle quotation mark.
+    case 0x2192:  // Rightwards arrow.
+    case 0x25b6:  // Right-pointing triangle.
+    case 0x25b7:
+      return '>';
+    case 0x2190:  // Leftwards arrow.
+    case 0x25c0:  // Left-pointing triangle.
+    case 0x25c1:
+      return '<';
+    case 0x2191:  // Upwards arrow.
+    case 0x25b2:  // Up-pointing triangle.
+    case 0x25b3:
+      return '^';
+    case 0x2193:  // Downwards arrow.
+    case 0x25bc:  // Down-pointing triangle.
+    case 0x25bd:
+      return 'v';
+    default:
+      break;
+  }
+
+  // Keep borders recognizable without letting GNU Screen and its outer
+  // terminal disagree about the width of box-drawing cells.
+  if (codepoint >= 0x2500 && codepoint <= 0x257f) {
+    switch (codepoint) {
+      case 0x2500:
+      case 0x2501:
+      case 0x2504:
+      case 0x2505:
+      case 0x2508:
+      case 0x2509:
+      case 0x254c:
+      case 0x254d:
+      case 0x2550:
+      case 0x2574:
+      case 0x2576:
+      case 0x2578:
+      case 0x257a:
+      case 0x257c:
+      case 0x257e:
+        return '-';
+      case 0x2502:
+      case 0x2503:
+      case 0x2506:
+      case 0x2507:
+      case 0x250a:
+      case 0x250b:
+      case 0x254e:
+      case 0x254f:
+      case 0x2551:
+      case 0x2575:
+      case 0x2577:
+      case 0x2579:
+      case 0x257b:
+      case 0x257d:
+      case 0x257f:
+        return '|';
+      default:
+        return '+';
+    }
+  }
+  if (codepoint >= 0x2580 && codepoint <= 0x259f) {
+    return '#';
+  }
+  if (codepoint >= 0x2800 && codepoint <= 0x28ff) {
+    return '.';
+  }
+  if (codepoint >= 0x25a0 && codepoint <= 0x25ff) {
+    return '*';
+  }
+  return '?';
+}
+
+void ApplyAmbiguousWidthFallback(Screen& screen) {
+  for (int y = 0; y < screen.dimy(); ++y) {
+    for (int x = 0; x < screen.dimx(); ++x) {
+      auto& cell = screen.CellAt(x, y);
+      if (cell.character.empty() || string_width(cell.character) != 1) {
+        continue;
+      }
+      size_t offset = 0;
+      uint32_t base_codepoint = 0;
+      bool base_codepoint_found = false;
+      while (offset < cell.character.size()) {
+        size_t end = offset;
+        uint32_t codepoint = 0;
+        if (!EatCodePoint(cell.character, offset, &end, &codepoint) ||
+            end <= offset) {
+          break;
+        }
+        offset = end;
+        if (IsCombining(codepoint)) {
+          continue;
+        }
+        base_codepoint = codepoint;
+        base_codepoint_found = true;
+        break;
+      }
+      if (!base_codepoint_found ||
+          !IsAmbiguousWidth(base_codepoint)) {
+        continue;
+      }
+      cell.character.assign(
+          1, AmbiguousWidthAsciiFallback(base_codepoint));
+    }
+  }
 }
 
 void OnExit() {
@@ -1029,6 +1153,14 @@ void App::Internal::HandleTask(Component component, Task& task) {
     if constexpr (std::is_same_v<T, Event>) {
 
       if (arg.is_cursor_position()) {
+        const int probe_reply_index = arg.cursor_y() - 1;
+        if (probe_reply_index >= 0 && probe_reply_index < 2 &&
+            gnu_screen_width_probe_replies_to_discard_[
+                static_cast<std::size_t>(probe_reply_index)] > 0U) {
+          --gnu_screen_width_probe_replies_to_discard_[
+              static_cast<std::size_t>(probe_reply_index)];
+          return;
+        }
         cursor_x_ = arg.cursor_x();
         cursor_y_ = arg.cursor_y();
         cursor_position_request.OnReply();
@@ -1282,6 +1414,12 @@ void App::Internal::Draw(Component component) {
   Render(*public_, document.get(), *selection_);
 
   if (use_differential_presenter) {
+    if (gnu_screen_ambiguous_width_fallback_) {
+      // Screen and the outer terminal must agree on every cell before Screen
+      // computes its own redisplay. Preserve true full-width text (including
+      // CJK) and replace only EAW=Ambiguous one-cell graphemes.
+      ApplyAmbiguousWidthFallback(*public_);
+    }
     auto current_frame_lines =
         detail::SplitFullscreenRows(public_->ToString());
     const bool frame_unchanged =
@@ -1435,9 +1573,44 @@ void App::Internal::InstallPipedInputHandling() {
 }
 
 void App::Internal::InstallTerminalInfo() {
+  const bool gnu_screen_session =
+      dimension_ == AppDimension::Fullscreen &&
+      use_alternative_screen_ && IsGnuScreenSession();
+  const char* tmux_session = std::getenv("TMUX");
+  const bool gnu_screen_probe_can_enable_unicode =
+      tmux_session == nullptr || *tmux_session == '\0';
+  // Stay conservative until both Screen and its outer terminal report that
+  // U+00B7 occupies one cell. A missing or late reply must never let either
+  // side corrupt the retained framebuffer.
+  gnu_screen_ambiguous_width_fallback_ =
+      gnu_screen_session;
+
   // Request the terminal to report the current cursor shape. We will restore it
   // on exit.
   if (is_stdout_a_tty_) {
+    if (gnu_screen_session) {
+      // The setup receiver and main-loop receiver both observe terminal
+      // replies. Reserve one row-tagged reply from each probe up front so a
+      // reply arriving just after the setup timeout cannot leak into normal
+      // CPR state. Counts persist across Install() lifetimes: two delayed
+      // generations can otherwise overlap and a one-bit marker would discard
+      // only the first.
+      ++gnu_screen_width_probe_replies_to_discard_[0];
+      ++gnu_screen_width_probe_replies_to_discard_[1];
+      // GNU Screen enables double-width handling for East-Asian Ambiguous
+      // codepoints in CJK locales independently of the outer terminal. The
+      // normal DSR reports Screen's virtual cursor (row 1); a DCS passthrough
+      // reports the outer terminal's cursor (row 2). FTXUI lays U+00B7 out as
+      // one cell, so only two column-2 replies can safely keep it unchanged.
+      // Conceal and erase both probes, then explicitly home both cursor
+      // models before the first full repaint.
+      TerminalSend(
+          "\x1B[?25l"
+          "\x1B[1;1H\x1B[8m\xC2\xB7\x1B[0m\x1B[6n"
+          "\x1B[1;1H\x1B[2K\x1B[H"
+          "\x1BP\x1B[2;1H\x1B[8m\xC2\xB7\x1B[0m\x1B[6n"
+          "\x1B[2;1H\x1B[2K\x1B[H\x1B\\");
+    }
     TerminalSend(DECRQSS_DECSCUSR);
     TerminalSend("\033[>q");  // XTVERSION
     TerminalSend("\033[>c");  // DA2
@@ -1453,6 +1626,10 @@ void App::Internal::InstallTerminalInfo() {
     auto setup_receiver = event_buffer.CreateReceiver();
     auto start = std::chrono::steady_clock::now();
     bool terminal_capabilities_received = false;
+    int gnu_screen_width_probe_column = 0;
+    int outer_terminal_width_probe_column = 0;
+    bool gnu_screen_width_probe_received =
+        !gnu_screen_session;
     // Wait for the cursor shape reply using the setup head.
     while (true) {
       FetchTerminalEvents();
@@ -1460,6 +1637,23 @@ void App::Internal::InstallTerminalInfo() {
         const auto event = setup_receiver->Pop();
         if (event.is_cursor_shape()) {
           cursor_reset_shape_ = event.cursor_shape();
+        }
+
+        if (gnu_screen_session && event.is_cursor_position() &&
+            (event.cursor_y() == 1 || event.cursor_y() == 2)) {
+          if (event.cursor_y() == 1) {
+            gnu_screen_width_probe_column = event.cursor_x();
+          } else {
+            outer_terminal_width_probe_column = event.cursor_x();
+          }
+          if (gnu_screen_width_probe_column != 0 &&
+              outer_terminal_width_probe_column != 0) {
+            gnu_screen_ambiguous_width_fallback_ =
+                !gnu_screen_probe_can_enable_unicode ||
+                gnu_screen_width_probe_column != 2 ||
+                outer_terminal_width_probe_column != 2;
+            gnu_screen_width_probe_received = true;
+          }
         }
 
         if (event.IsTerminalCapabilities()) {
@@ -1481,7 +1675,8 @@ void App::Internal::InstallTerminalInfo() {
       // Response are expected to be received in order, so we can break when
       // the last one (XTVERSION) is received. We also set a timeout to prevent
       // waiting forever in case the terminal doesn't support these queries.
-      if (terminal_capabilities_received) {
+      if (terminal_capabilities_received &&
+          gnu_screen_width_probe_received) {
         break;
       }
 
