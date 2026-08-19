@@ -402,6 +402,24 @@ char AmbiguousWidthAsciiFallback(uint32_t codepoint) {
     case 0x25bc:  // Down-pointing triangle.
     case 0x25bd:
       return 'v';
+    // Keep the thinking pulse recognizable without changing cell width:
+    // ◇ -> ◈ -> ◆ -> ◈ becomes . -> + -> * -> +.
+    case 0x25c7:  // White diamond.
+      return '.';
+    case 0x25c8:  // White diamond containing black small diamond.
+      return '+';
+    case 0x25c6:  // Black diamond.
+      return '*';
+    // Map the complete request-spinner family, including the two neutral-EAW
+    // companions, to one coherent ASCII rotation using |, /, -, and \.
+    case 0x25d0:  // Circle with left half black.
+      return '|';
+    case 0x25d3:  // Circle with upper half black.
+      return '/';
+    case 0x25d1:  // Circle with right half black.
+      return '-';
+    case 0x25d2:  // Circle with lower half black.
+      return '\\';
     default:
       break;
   }
@@ -458,6 +476,14 @@ char AmbiguousWidthAsciiFallback(uint32_t codepoint) {
   return '?';
 }
 
+bool IsAmbiguousWidthAnimationCompanion(uint32_t codepoint) {
+  // U+25D0/U+25D1 are EAW=Ambiguous while U+25D2/U+25D3 are Neutral,
+  // despite all four forming one animation. Convert the neutral pair whenever
+  // the ambiguous-width fallback is active so the spinner never alternates
+  // between ASCII and Unicode frames.
+  return codepoint == 0x25d2 || codepoint == 0x25d3;
+}
+
 void ApplyAmbiguousWidthFallback(Screen& screen) {
   for (int y = 0; y < screen.dimy(); ++y) {
     for (int x = 0; x < screen.dimx(); ++x) {
@@ -484,7 +510,8 @@ void ApplyAmbiguousWidthFallback(Screen& screen) {
         break;
       }
       if (!base_codepoint_found ||
-          !IsAmbiguousWidth(base_codepoint)) {
+          (!IsAmbiguousWidth(base_codepoint) &&
+           !IsAmbiguousWidthAnimationCompanion(base_codepoint))) {
         continue;
       }
       cell.character.assign(
@@ -1417,7 +1444,8 @@ void App::Internal::Draw(Component component) {
     if (gnu_screen_ambiguous_width_fallback_) {
       // Screen and the outer terminal must agree on every cell before Screen
       // computes its own redisplay. Preserve true full-width text (including
-      // CJK) and replace only EAW=Ambiguous one-cell graphemes.
+      // CJK), replace EAW=Ambiguous one-cell graphemes, and keep mixed-EAW
+      // animation families on one coherent ASCII frame set.
       ApplyAmbiguousWidthFallback(*public_);
     }
     auto current_frame_lines =
