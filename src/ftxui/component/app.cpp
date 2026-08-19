@@ -168,6 +168,10 @@ struct App::Internal {
   std::array<std::uint32_t, 2>
       gnu_screen_width_probe_replies_to_discard_{};
   bool gnu_screen_ambiguous_width_fallback_ = false;
+  // Physical-to-render column shift introduced by the symmetric GNU Screen
+  // guard (0 normally, 1 while the left mirror column is reserved). Input
+  // coordinates are translated back by this amount before delivery.
+  int gnu_screen_render_origin_x_ = 0;
 
   bool frame_valid_ = false;
 
@@ -1219,6 +1223,13 @@ void App::Internal::HandleTask(Component component, Task& task) {
       if (arg.is_mouse()) {
         arg.mouse().x -= cursor_x_;
         arg.mouse().y -= cursor_y_;
+        // A symmetric Screen guard shifts the render origin one physical
+        // column right; translate mouse columns back into render coordinates
+        // so clicks land on the component they visually hit.
+        arg.mouse().x -= gnu_screen_render_origin_x_;
+        if (arg.mouse().x < 0) {
+          arg.mouse().x = 0;
+        }
       }
 
       arg.screen_ = public_;
@@ -1355,6 +1366,8 @@ void App::Internal::Draw(Component component) {
       use_alternative_screen_ && IsGnuScreenSession();
   const bool gnu_screen_margin_guard =
       gnu_screen_session && terminal.dimx > 1;
+  const bool gnu_screen_left_pad =
+      gnu_screen_margin_guard && terminal.dimx > 2;
   document->ComputeRequirement();
   switch (dimension_) {
     case AppDimension::Fixed:
@@ -1385,6 +1398,16 @@ void App::Internal::Draw(Component component) {
     // terminals retain their complete width.
     --dimx;
   }
+  if (gnu_screen_left_pad) {
+    // Mirror the reserved column on the left so the guarded canvas stays
+    // visually centered inside the Screen window instead of hugging the left
+    // edge. The render origin shifts one physical column right; the presenter
+    // prints a default-styled blank into that cell and offsets the cursor,
+    // while input coordinates are translated back via
+    // gnu_screen_render_origin_x_.
+    --dimx;
+  }
+  gnu_screen_render_origin_x_ = gnu_screen_left_pad ? 1 : 0;
 
   const bool resized =
       frame_count_ == 0 || (dimx != public_->dimx_) || (dimy != public_->dimy_);
@@ -1479,7 +1502,8 @@ void App::Internal::Draw(Component component) {
           public_->cursor_.y,
           public_->cursor_.shape,
           present_mode,
-          gnu_screen_margin_guard);
+          gnu_screen_margin_guard,
+          gnu_screen_left_pad);
       TerminalSend(output);
       TerminalFlush();
       physical_framebuffer_valid_ = true;
@@ -1492,9 +1516,12 @@ void App::Internal::Draw(Component component) {
     previous_frame_cursor_valid_ = true;
     set_cursor_position_.clear();
     if (public_->dimx_ > 0 && public_->dimy_ > 0) {
+      // Park inside the guarded canvas: the rightmost render cell sits one
+      // physical column further right while the left mirror column is active.
       reset_cursor_position_ = "\x1B[" +
           std::to_string(public_->dimy_) + ";" +
-          std::to_string(public_->dimx_) + "H";
+          std::to_string(
+              public_->dimx_ + gnu_screen_render_origin_x_) + "H";
     } else {
       reset_cursor_position_.clear();
     }
