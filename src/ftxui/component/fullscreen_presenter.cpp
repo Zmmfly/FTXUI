@@ -12,6 +12,7 @@ namespace {
 constexpr std::string_view kBeginSynchronizedOutput{"\x1B[?2026h"};
 constexpr std::string_view kEndSynchronizedOutput{"\x1B[?2026l"};
 constexpr std::string_view kHideCursor{"\x1B[?25l"};
+constexpr std::string_view kDisableLineWrap{"\x1B[?7l"};
 
 std::string CursorPosition(int x, int y, int width, int height) {
   const int bounded_x = std::clamp(x, 0, std::max(width - 1, 0));
@@ -59,20 +60,36 @@ std::string PresentFullscreenRows(
     int cursor_x,
     int cursor_y,
     Screen::Cursor::Shape cursor_shape,
-    bool force_full) {
+    FullscreenPresentMode mode) {
   std::string output;
   output += kBeginSynchronizedOutput;
   // Hiding the cursor also prevents visible cursor sweeps on terminals that
   // safely ignore the synchronized-output private mode.
   output += kHideCursor;
+  // Reassert DECAWM for every frame. GNU Screen can restore its virtual
+  // terminal's wrapping mode across resize and redisplay paths without
+  // restarting the application; a full-width update on the bottom row would
+  // then scroll the window and leave the presenter's retained rows out of sync
+  // with what is visible.
+  output += kDisableLineWrap;
 
-  const bool full =
-      force_full || previous_rows.size() != current_rows.size();
-  if (full) {
+  const bool row_count_changed =
+      previous_rows.size() != current_rows.size();
+  if (mode == FullscreenPresentMode::FullRepaint) {
+    // Multiplexers can invalidate a retained framebuffer when they reflow or
+    // redisplay a window. Rewrite every physical row by absolute position so
+    // the next frame is self-healing without exposing a blank screen between
+    // frames. Avoid CRLF: some nested PTY chains apply delayed-wrap semantics
+    // differently and can otherwise shift all rows below a full-width line.
+    for (std::size_t row = 0; row < current_rows.size(); ++row) {
+      output += "\x1B[" + std::to_string(row + 1) + ";1H";
+      output += current_rows[row];
+    }
+  } else if (mode == FullscreenPresentMode::FullClear || row_count_changed) {
     output += "\x1B[2J\x1B[H";
     for (std::size_t row = 0; row < current_rows.size(); ++row) {
       if (row != 0) {
-        output += "\r\n";
+        output += "\x1B[" + std::to_string(row + 1) + ";1H";
       }
       output += current_rows[row];
     }

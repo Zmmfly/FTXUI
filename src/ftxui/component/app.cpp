@@ -8,6 +8,7 @@
 #include <csignal>  // for signal, SIGTSTP, SIGABRT, SIGWINCH, raise, SIGFPE, SIGILL, SIGINT, SIGSEGV, SIGTERM, __sighandler_t, size_t
 #include <cstdint>
 #include <cstdio>  // for fileno, stdin
+#include <cstdlib>  // for getenv
 #include <ftxui/component/app.hpp>
 #include <ftxui/component/fullscreen_presenter.hpp>
 #include <ftxui/component/task.hpp>  // for Task, Closure, AnimationTask
@@ -156,6 +157,12 @@ struct App::Internal {
   // Rows retained by the fullscreen differential presenter; all other App
   // modes keep upstream behavior.
   std::vector<std::string> previous_frame_lines_;
+  int previous_frame_cursor_x_ = 0;
+  int previous_frame_cursor_y_ = 0;
+  Screen::Cursor::Shape previous_frame_cursor_shape_ =
+      Screen::Cursor::Hidden;
+  bool previous_frame_cursor_valid_ = false;
+  bool physical_framebuffer_valid_ = false;
 
   bool frame_valid_ = false;
 
@@ -321,6 +328,46 @@ constexpr unsigned int kPerformancePublicPost = 1U << 0U;
 constexpr unsigned int kPerformanceDraw = 1U << 1U;
 
 std::stack<Closure> on_exit_functions;  // NOLINT
+
+bool IsTerminalFamily(const char* term, std::string_view family) {
+  if (term == nullptr) {
+    return false;
+  }
+  const std::string_view name{term};
+  if (name == family) {
+    return true;
+  }
+  return name.size() > family.size() &&
+         name.substr(0, family.size()) == family &&
+         (name[family.size()] == '-' || name[family.size()] == '.');
+}
+
+bool IsGnuScreenSession() {
+  const char* screen_session = std::getenv("STY");
+  if (screen_session != nullptr && *screen_session != '\0') {
+    return true;
+  }
+  // tmux traditionally advertises a screen-* TERM value. Prefer its explicit
+  // session marker so GNU Screen-specific lifecycle handling is not applied
+  // to tmux unless Screen is genuinely the outer multiplexer (and STY remains
+  // present above).
+  const char* tmux_session = std::getenv("TMUX");
+  if (tmux_session != nullptr && *tmux_session != '\0') {
+    return false;
+  }
+  return IsTerminalFamily(std::getenv("TERM"), "screen");
+}
+
+bool IsTerminalMultiplexerSession() {
+  const char* tmux_session = std::getenv("TMUX");
+  if (tmux_session != nullptr && *tmux_session != '\0') {
+    return true;
+  }
+  if (IsGnuScreenSession()) {
+    return true;
+  }
+  return IsTerminalFamily(std::getenv("TERM"), "tmux");
+}
 
 void OnExit() {
   while (!on_exit_functions.empty()) {
@@ -618,6 +665,11 @@ void App::Internal::ExitNow() {
 
 void App::Internal::Install() {
   frame_valid_ = false;
+  // Entering a new terminal-mode lifetime invalidates what the retained
+  // presenter believes is physically visible. This also covers
+  // WithRestoredIO() and reusing one App for multiple Loop() calls, where the
+  // dimensions and serialized frame may otherwise remain identical.
+  physical_framebuffer_valid_ = false;
 
   // Flush the buffer for stdout to ensure whatever the user has printed before
   // is fully applied before we start modifying the terminal configuration. This
@@ -886,6 +938,15 @@ void App::Internal::PostMain() {
     std::swap(g_active_screen, suspended_screen_);
     g_active_screen->internal_->Install();
   } else {
+    if (use_alternative_screen_ && IsGnuScreenSession()) {
+      // Clear the final alternate-screen frame before restoring the primary
+      // screen. GNU Screen defaults its `altscreen` setting to off, so it can
+      // render the final loading/closing page in the ordinary window even
+      // though the child advertised alternate-screen mode. Clearing first
+      // removes that fallback frame while preserving primary-screen contents
+      // on terminals that implement ?1049 normally.
+      TerminalSend("\x1B[2J\x1B[H");
+    }
     Uninstall();
 
     std::cout << "\r";
@@ -1150,14 +1211,15 @@ void App::Internal::Draw(Component component) {
       break;
   }
 
-  // Hide cursor to prevent flickering during reset.
-  TerminalSend("\033[?25l");
-
   const bool resized =
       frame_count_ == 0 || (dimx != public_->dimx_) || (dimy != public_->dimy_);
   const bool use_differential_presenter =
       dimension_ == AppDimension::Fullscreen && use_alternative_screen_;
   if (!use_differential_presenter) {
+    // Hide cursor to prevent flickering during the legacy reset/redraw path.
+    // The fullscreen presenter owns cursor visibility for its atomic update;
+    // hiding it here as well would expose a redundant blink on GNU Screen.
+    TerminalSend("\033[?25l");
     TerminalSend(ResetCursorPosition());
   }
 
@@ -1206,19 +1268,49 @@ void App::Internal::Draw(Component component) {
   if (use_differential_presenter) {
     auto current_frame_lines =
         detail::SplitFullscreenRows(public_->ToString());
-    const auto output = detail::PresentFullscreenRows(
-        previous_frame_lines_,
-        current_frame_lines,
-        public_->dimx_,
-        public_->dimy_,
-        public_->cursor_.x,
-        public_->cursor_.y,
-        public_->cursor_.shape,
-        resized || previous_frame_lines_.empty());
-    TerminalSend(output);
-    TerminalFlush();
+    const bool frame_unchanged =
+        physical_framebuffer_valid_ && !resized &&
+        current_frame_lines == previous_frame_lines_;
+    const bool cursor_unchanged =
+        previous_frame_cursor_valid_ &&
+        public_->cursor_.x == previous_frame_cursor_x_ &&
+        public_->cursor_.y == previous_frame_cursor_y_ &&
+        public_->cursor_.shape == previous_frame_cursor_shape_;
+    if (!frame_unchanged || !cursor_unchanged) {
+      // Screen and tmux do not reliably implement synchronized output. A
+      // full redraw for every mouse or animation event therefore becomes
+      // visible line-by-line (and consumes an entire PTY frame). Retain normal
+      // differential updates, using absolute full-row recovery only when a
+      // multiplexer framebuffer is invalidated or its window changes size.
+      auto present_mode = detail::FullscreenPresentMode::Differential;
+      if (!physical_framebuffer_valid_) {
+        present_mode = IsTerminalMultiplexerSession()
+                           ? detail::FullscreenPresentMode::FullRepaint
+                           : detail::FullscreenPresentMode::FullClear;
+      } else if (resized) {
+        present_mode = IsTerminalMultiplexerSession()
+                           ? detail::FullscreenPresentMode::FullRepaint
+                           : detail::FullscreenPresentMode::FullClear;
+      }
+      const auto output = detail::PresentFullscreenRows(
+          previous_frame_lines_,
+          current_frame_lines,
+          public_->dimx_,
+          public_->dimy_,
+          public_->cursor_.x,
+          public_->cursor_.y,
+          public_->cursor_.shape,
+          present_mode);
+      TerminalSend(output);
+      TerminalFlush();
+      physical_framebuffer_valid_ = true;
+    }
 
     previous_frame_lines_ = std::move(current_frame_lines);
+    previous_frame_cursor_x_ = public_->cursor_.x;
+    previous_frame_cursor_y_ = public_->cursor_.y;
+    previous_frame_cursor_shape_ = public_->cursor_.shape;
+    previous_frame_cursor_valid_ = true;
     set_cursor_position_.clear();
     if (public_->dimx_ > 0 && public_->dimy_ > 0) {
       reset_cursor_position_ = "\x1B[" +
