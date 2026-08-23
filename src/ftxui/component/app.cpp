@@ -16,6 +16,7 @@
 #include <functional>        // for function
 #include <initializer_list>  // for initializer_list
 #include <iostream>  // for cout, ostream, operator<<, basic_ostream, endl, flush
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -230,6 +231,10 @@ struct App::Internal {
   task::TaskRunner task_runner;
   std::chrono::time_point<std::chrono::steady_clock> last_char_time =
       std::chrono::steady_clock::now();
+#if defined(_WIN32)
+  // A bounded INPUT_RECORD read may split one UTF-16 surrogate pair.
+  std::wstring pending_windows_utf16;
+#endif
   std::string output_buffer;
 
   class ThrottledRequest {
@@ -326,7 +331,8 @@ struct App::Internal {
   void InstallPipedInputHandling();
   void InstallTerminalInfo();
   void Signal(int signal);
-  size_t FetchTerminalEvents();
+  size_t FetchTerminalEvents(
+      size_t maximum_input_units = std::numeric_limits<size_t>::max());
   void PostAnimationTask();
 };
 
@@ -336,6 +342,7 @@ App* g_active_screen = nullptr;  // NOLINT
 
 constexpr unsigned int kPerformancePublicPost = 1U << 0U;
 constexpr unsigned int kPerformanceDraw = 1U << 1U;
+constexpr size_t kTerminalInputDrainBudget = 16U * 1024U;
 
 std::stack<Closure> on_exit_functions;  // NOLINT
 
@@ -1127,7 +1134,19 @@ bool App::Internal::HasQuitted() {
 void App::Internal::RunOnce(const Component& component) {
   const AutoReset set_component(&component_, component);
   ExecuteSignalHandlers();
-  FetchTerminalEvents();
+  // POSIX and Emscripten intentionally use small individual reads. Drain
+  // several ready chunks so event-level mouse coalescing below can see one
+  // complete burst, while bounding each frame so terminal input cannot starve
+  // posted tasks or drawing. Win32 applies the same bound to INPUT_RECORDs.
+  size_t drained_input = 0;
+  while (drained_input < kTerminalInputDrainBudget) {
+    const size_t fetched = FetchTerminalEvents(
+        kTerminalInputDrainBudget - drained_input);
+    if (fetched == 0U) {
+      break;
+    }
+    drained_input += fetched;
+  }
 
   // Any-event mouse tracking can deliver hundreds of adjacent hover samples
   // in one terminal read. Only the final coordinate in a homogeneous moved
@@ -1188,6 +1207,10 @@ void App::Internal::RunOnce(const Component& component) {
 
 void App::Private::InjectTerminalEventForTesting(App& app, Event event) {
   app.internal_->event_buffer.Push(std::move(event));
+}
+
+size_t App::Private::TerminalInputDrainBudgetForTesting() {
+  return kTerminalInputDrainBudget;
 }
 
 void App::Internal::RunOnceBlocking(Component component) {
@@ -1872,7 +1895,10 @@ void App::Internal::Signal(int signal) {
 #endif
 }
 
-size_t App::Internal::FetchTerminalEvents() {
+size_t App::Internal::FetchTerminalEvents(size_t maximum_input_units) {
+  if (maximum_input_units == 0U) {
+    return 0U;
+  }
 #if defined(_WIN32)
   auto get_input_records = [&]() -> std::vector<INPUT_RECORD> {
     // Check if there is input in the console.
@@ -1886,7 +1912,9 @@ size_t App::Internal::FetchTerminalEvents() {
       return std::vector<INPUT_RECORD>();
     }
     // Read the input events.
-    std::vector<INPUT_RECORD> records(number_of_events);
+    const auto bounded_events = std::min<size_t>(
+        static_cast<size_t>(number_of_events), maximum_input_units);
+    std::vector<INPUT_RECORD> records(bounded_events);
     DWORD number_of_events_read = 0;
     if (!ReadConsoleInput(console, records.data(), (DWORD)records.size(),
                           &number_of_events_read)) {
@@ -1909,7 +1937,6 @@ size_t App::Internal::FetchTerminalEvents() {
   // Convert the input events to FTXUI events.
   // For each event, we call the terminal input parser to convert it to
   // Event.
-  std::wstring wstring;
   for (const auto& r : records) {
     switch (r.EventType) {
       case KEY_EVENT: {
@@ -1930,15 +1957,15 @@ size_t App::Internal::FetchTerminalEvents() {
           }
           continue;
         }
-        wstring += wc;
+        pending_windows_utf16 += wc;
         if (wc >= 0xd800 && wc <= 0xdbff) {
           // Wait for the Low Surrogate to arrive in the next record.
           continue;
         }
-        for (auto it : to_string(wstring)) {
+        for (auto it : to_string(pending_windows_utf16)) {
           terminal_input_parser.Add(it);
         }
-        wstring.clear();
+        pending_windows_utf16.clear();
       } break;
       case WINDOW_BUFFER_SIZE_EVENT:
         public_->Post(Event::Special({0}));
@@ -1955,7 +1982,9 @@ size_t App::Internal::FetchTerminalEvents() {
   // Read chars from the terminal.
   // We configured it to be non blocking.
   std::array<char, 128> out{};
-  const ssize_t l = read(STDIN_FILENO, out.data(), out.size());
+  const auto read_capacity =
+      std::min(out.size(), maximum_input_units);
+  const ssize_t l = read(STDIN_FILENO, out.data(), read_capacity);
   if (l <= 0) {
     const auto timeout = std::chrono::steady_clock::now() - last_char_time;
     const size_t timeout_microseconds =
@@ -1984,7 +2013,9 @@ size_t App::Internal::FetchTerminalEvents() {
 
   // Read chars from the terminal.
   std::array<char, 128> out{};
-  const ssize_t l = read(tty_fd_, out.data(), out.size());
+  const auto read_capacity =
+      std::min(out.size(), maximum_input_units);
+  const ssize_t l = read(tty_fd_, out.data(), read_capacity);
   if (l <= 0) {
     return 0;
   }

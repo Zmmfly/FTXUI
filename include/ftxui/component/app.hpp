@@ -259,6 +259,9 @@ class FTXUI_EXPORT(COMPONENT) App : public Screen {
     /// Inject a parser-produced event into the next terminal-input batch.
     /// This is an internal test seam; ordinary callers should use PostEvent.
     static void InjectTerminalEventForTesting(App& app, Event event);
+
+    /// Maximum platform input units drained by one RunOnce frame.
+    static size_t TerminalInputDrainBudgetForTesting();
   };
   friend Private;
 };
