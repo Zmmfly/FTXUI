@@ -19,6 +19,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stack>  // for stack
 #include <string>
 #include <string_view>
@@ -1128,9 +1129,42 @@ void App::Internal::RunOnce(const Component& component) {
   ExecuteSignalHandlers();
   FetchTerminalEvents();
 
+  // Any-event mouse tracking can deliver hundreds of adjacent hover samples
+  // in one terminal read. Only the final coordinate in a homogeneous moved
+  // run can affect the single frame drawn below, so avoid replaying every
+  // stale coordinate through an O(list-size) component hit test. Input order
+  // is preserved at every key/click/wheel and button/modifier transition.
+  std::optional<Event> pending_mouse_move;
+  const auto flush_mouse_move = [&] {
+    if (pending_mouse_move) {
+      public_->Post(std::move(*pending_mouse_move));
+      pending_mouse_move.reset();
+    }
+  };
   while (!quit_ && main_loop_receiver->Has()) {
-    public_->Post(main_loop_receiver->Pop());
+    auto event = main_loop_receiver->Pop();
+    const bool is_mouse_move =
+        event.is_mouse() && event.mouse().motion == Mouse::Moved;
+    if (!is_mouse_move) {
+      flush_mouse_move();
+      public_->Post(std::move(event));
+      continue;
+    }
+    if (pending_mouse_move) {
+      const auto& previous = pending_mouse_move->mouse();
+      const auto& current = event.mouse();
+      if (previous.button != current.button ||
+          previous.shift != current.shift || previous.meta != current.meta ||
+          previous.control != current.control) {
+        flush_mouse_move();
+      }
+    }
+    // Reconstruct instead of assigning: Event's generated assignment also
+    // carries parser-owned auxiliary state, while this slot represents a new
+    // sample and must be replaced in full.
+    pending_mouse_move.emplace(std::move(event));
   }
+  flush_mouse_move();
 
   // Execute the pending tasks from the queue.
   const size_t executed_task = task_runner.ExecutedTasks();
@@ -1150,6 +1184,10 @@ void App::Internal::RunOnce(const Component& component) {
       public_->Post(Event::Custom);
     }
   }
+}
+
+void App::Private::InjectTerminalEventForTesting(App& app, Event event) {
+  app.internal_->event_buffer.Push(std::move(event));
 }
 
 void App::Internal::RunOnceBlocking(Component component) {

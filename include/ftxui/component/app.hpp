@@ -252,9 +252,13 @@ class FTXUI_EXPORT(COMPONENT) App : public Screen {
   friend class Loop;
 
  public:
-  class Private {
+  class FTXUI_EXPORT(COMPONENT) Private {
    public:
     static void Signal(App& s, int signal) { s.Signal(signal); }
+
+    /// Inject a parser-produced event into the next terminal-input batch.
+    /// This is an internal test seam; ordinary callers should use PostEvent.
+    static void InjectTerminalEventForTesting(App& app, Event event);
   };
   friend Private;
 };
