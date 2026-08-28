@@ -184,6 +184,8 @@ struct FTXUI_EXPORT(COMPONENT) InputOption {
   Ref<bool> wrap_text = false; ///< Soft-wrap overlong lines to the frame
                                ///< width instead of scrolling horizontally.
   Ref<bool> insert = true;     ///< Insert or overtype character mode.
+  Ref<bool> cursor_cell_inverted = false;  ///< Invert the cursor cell while
+                                           ///< focused for extra contrast.
 
   /// Called when the content changes.
   std::function<void()> on_change = [] {};

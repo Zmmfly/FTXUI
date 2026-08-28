@@ -175,6 +175,13 @@ class InputBase : public ComponentBase, public InputOption {
     const auto focused = (!is_focused && !hovered_) ? focus
                          : insert()                 ? focusCursorBarBlinking
                                                     : focusCursorBlockBlinking;
+    const auto decorate_cursor = [&](Element element) {
+      element = focused(std::move(element));
+      if (is_focused && cursor_cell_inverted()) {
+        element |= inverted;
+      }
+      return element;
+    };
 
     auto transform_func =
         transform ? transform : InputOption::Default().transform;
@@ -190,7 +197,7 @@ class InputBase : public ComponentBase, public InputOption {
           vbox({
               dbox({
                   hbox({
-                      text(" ") | focused | reflect(cursor_box_),
+                      decorate_cursor(text(" ")) | reflect(cursor_box_),
                       text("") | xflex,
                   }),
                   text(placeholder()),
@@ -274,7 +281,7 @@ class InputBase : public ComponentBase, public InputOption {
           // Cursor at the end of this visual line.
           cursor_element = hbox({
               Text(line.substr(vstart, vend - vstart)),
-              text(" ") | focused | reflect(cursor_box_),
+              decorate_cursor(text(" ")) | reflect(cursor_box_),
           });
         } else {
           // Cursor in the middle of this visual line.
@@ -283,10 +290,11 @@ class InputBase : public ComponentBase, public InputOption {
           cursor_element = hbox({
               Text(line.substr(vstart, static_cast<size_t>(cursor_char_index) -
                                            vstart)),
-              Text(line.substr(static_cast<size_t>(cursor_char_index),
-                               static_cast<size_t>(glyph_end) -
-                                   static_cast<size_t>(cursor_char_index))) |
-                  focused | reflect(cursor_box_),
+              decorate_cursor(Text(line.substr(
+                  static_cast<size_t>(cursor_char_index),
+                  static_cast<size_t>(glyph_end) -
+                      static_cast<size_t>(cursor_char_index)))) |
+                  reflect(cursor_box_),
               Text(line.substr(static_cast<size_t>(glyph_end), vend - glyph_end)),
           });
         }
