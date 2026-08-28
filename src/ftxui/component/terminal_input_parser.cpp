@@ -110,6 +110,14 @@ void TerminalInputParser::Timeout(int time) {
 }
 
 void TerminalInputParser::Add(char c) {
+  // A standalone Escape remains pending briefly so it can still introduce an
+  // Alt key or terminal control sequence. Mouse reporting can place its own
+  // ESC immediately after a physical Escape during that window. Treat the
+  // adjacent ESC as an event boundary; otherwise both prefixes are consumed
+  // as one unknown special event and the mouse payload leaks out as text.
+  if (c == '\x1B' && pending_ == "\x1B") {
+    Send(SPECIAL);
+  }
   pending_ += c;
   timeout_ = 0;
   position_ = -1;
