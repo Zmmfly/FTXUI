@@ -328,6 +328,7 @@ struct App::Internal {
   void RequestCursorPosition(bool force = false);
   void TerminalSend(std::string_view);
   void TerminalFlush();
+  void FlushMouseTrackingDisableAndDrainInput();
   void InstallPipedInputHandling();
   void InstallTerminalInfo();
   void Signal(int signal);
@@ -343,6 +344,7 @@ App* g_active_screen = nullptr;  // NOLINT
 constexpr unsigned int kPerformancePublicPost = 1U << 0U;
 constexpr unsigned int kPerformanceDraw = 1U << 1U;
 constexpr size_t kTerminalInputDrainBudget = 16U * 1024U;
+constexpr auto kMouseExitFenceMaximum = std::chrono::milliseconds(100);
 
 std::stack<Closure> on_exit_functions;  // NOLINT
 
@@ -899,7 +901,11 @@ void App::Internal::Install() {
   g_tty_fd = tty_fd_;
   g_has_original_termios = true;
   on_exit_functions.emplace([terminal = terminal, tty_fd_ = tty_fd_] {
-    tcsetattr(tty_fd_, TCSANOW, &terminal);
+    // Restoring canonical input and echo must discard anything that reached
+    // the line discipline at the teardown boundary. TCSANOW preserves those
+    // bytes, allowing one late mouse report to be echoed once by the kernel
+    // and then interpreted a second time by the caller's shell.
+    tcsetattr(tty_fd_, TCSAFLUSH, &terminal);
   });
 
   // Enabling raw terminal input mode
@@ -993,6 +999,14 @@ void App::Internal::Install() {
   });
 
   if (track_mouse_) {
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+    // Pop after the four mouse resets below, but before line wrapping,
+    // alternate-screen state, and termios are restored. This closes the
+    // interval in which motion reports already emitted by the terminal could
+    // otherwise become ordinary shell input after Ctrl+Q.
+    on_exit_functions.emplace(
+        [this] { FlushMouseTrackingDisableAndDrainInput(); });
+#endif
     enable({DECMode::kMouseVt200});
     enable({DECMode::kMouseAnyEvent});
     enable({DECMode::kMouseUrxvtMode});
@@ -1028,7 +1042,6 @@ void App::Internal::Install() {
 }
 
 void App::Internal::Uninstall() {
-  g_terminal_is_raw = false;
   installed_ = false;
 
   // During shutdown, wait for all of the replies.
@@ -1059,6 +1072,10 @@ void App::Internal::Uninstall() {
   }
 
   OnExit();
+  // Keep emergency restoration armed through the bounded mouse-input drain
+  // and every terminal-mode callback above. Only clear it after termios (or
+  // the Windows console mode) has actually been restored.
+  g_terminal_is_raw = false;
 }
 
 void App::Internal::PreMain() {
@@ -1648,6 +1665,51 @@ void App::Internal::TerminalFlush() {
   output_buffer += '\0';
   std::cout << output_buffer << std::flush;
   output_buffer.clear();
+}
+
+void App::Internal::FlushMouseTrackingDisableAndDrainInput() {
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+  if (!is_stdin_a_tty_ || !is_stdout_a_tty_ || tty_fd_ < 0) {
+    return;
+  }
+
+  // The mouse-reset callbacks have appended their DECRST sequences. Follow
+  // them with a cursor-position query: its reply is an ordering fence proving
+  // that the terminal processed the mouse resets after emitting every earlier
+  // report. Publish this batch without adding the normal NUL flush marker;
+  // the final OnExit flush retains the existing wire protocol.
+  auto fence_receiver = event_buffer.CreateReceiver();
+  TerminalSend(DeviceStatusReport(DSRMode::kCursor));
+  std::cout << output_buffer << std::flush;
+  output_buffer.clear();
+
+  const auto deadline =
+      std::chrono::steady_clock::now() + kMouseExitFenceMaximum;
+  bool fence_received = false;
+  while (std::chrono::steady_clock::now() < deadline) {
+    size_t fetched_input = 0U;
+    while (fetched_input < kTerminalInputDrainBudget) {
+      const auto fetched = FetchTerminalEvents(
+          kTerminalInputDrainBudget - fetched_input);
+      if (fetched == 0U) {
+        break;
+      }
+      fetched_input += fetched;
+    }
+    while (fence_receiver->Has()) {
+      if (fence_receiver->Pop().is_cursor_position()) {
+        fence_received = true;
+      }
+    }
+    while (main_loop_receiver->Has()) {
+      std::ignore = main_loop_receiver->Pop();
+    }
+    if (fence_received) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+#endif
 }
 
 void App::Internal::InstallPipedInputHandling() {
