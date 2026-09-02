@@ -53,6 +53,16 @@ bool LocaleTreatsAmbiguousAsWide(const char* locale);
 // @return 1 or 2 cells; control and combining inputs are not handled
 FTXUI_EXPORT(SCREEN) int CodepointCellWidth(uint32_t ucs);
 
+// @brief Neutral-width companions of ambiguous spinner animations
+//
+// U+25D2/U+25D3 pair with the ambiguous U+25D0/U+25D1 in one animation;
+// layouts that widen ambiguous codepoints must widen them too.
+//
+// @param codepoint Unicode codepoint
+// @return True for the neutral half-circle companions
+FTXUI_EXPORT(SCREEN)
+bool IsAmbiguousWidthAnimationCompanion(uint32_t codepoint);
+
 FTXUI_EXPORT(SCREEN) size_t GlyphPrevious(std::string_view input, size_t start);
 FTXUI_EXPORT(SCREEN) size_t GlyphNext(std::string_view input, size_t start);
 

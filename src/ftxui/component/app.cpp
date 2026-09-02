@@ -494,11 +494,10 @@ char AmbiguousWidthAsciiFallback(uint32_t codepoint) {
 }
 
 bool IsAmbiguousWidthAnimationCompanion(uint32_t codepoint) {
-  // U+25D0/U+25D1 are EAW=Ambiguous while U+25D2/U+25D3 are Neutral,
-  // despite all four forming one animation. Convert the neutral pair whenever
-  // the ambiguous-width fallback is active so the spinner never alternates
-  // between ASCII and Unicode frames.
-  return codepoint == 0x25d2 || codepoint == 0x25d3;
+  // Defined in screen/string.cpp: the neutral half-circle companions share
+  // the ambiguous pair's width under the CJK layout so spinner frames never
+  // alternate between one and two cells.
+  return ftxui::IsAmbiguousWidthAnimationCompanion(codepoint);
 }
 
 void ApplyAmbiguousWidthFallback(Screen& screen) {

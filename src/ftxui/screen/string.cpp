@@ -1414,11 +1414,21 @@ int CodepointCellWidth(uint32_t ucs) {
   // CJK layout renders most East-Asian Ambiguous codepoints as two cells.
   // Box drawing stays narrow: CJK fonts almost always render it one cell
   // wide, and borders and separators rely on that.
-  if (AmbiguousWidthIsWide() && IsAmbiguousWidth(ucs) &&
+  if (AmbiguousWidthIsWide() &&
+      (IsAmbiguousWidth(ucs) ||
+       IsAmbiguousWidthAnimationCompanion(ucs)) &&
       !(ucs >= 0x2500 && ucs <= 0x257F)) {  // NOLINT
     return 2;
   }
   return 1;
+}
+
+// U+25D0/U+25D1 are EAW=Ambiguous while U+25D2/U+25D3 are Neutral, despite
+// all four forming one half-circle spinner animation. Treat the neutral
+// pair as ambiguous so every frame keeps the same width under the CJK
+// layout instead of pulsing between one and two cells.
+bool IsAmbiguousWidthAnimationCompanion(uint32_t codepoint) {
+  return codepoint == 0x25d2 || codepoint == 0x25d3;
 }
 
 bool IsFullWidth(uint32_t ucs) {
