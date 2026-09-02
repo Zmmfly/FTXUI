@@ -494,10 +494,11 @@ char AmbiguousWidthAsciiFallback(uint32_t codepoint) {
 }
 
 bool IsAmbiguousWidthAnimationCompanion(uint32_t codepoint) {
-  // Defined in screen/string.cpp: the neutral half-circle companions share
-  // the ambiguous pair's width under the CJK layout so spinner frames never
-  // alternate between one and two cells.
-  return ftxui::IsAmbiguousWidthAnimationCompanion(codepoint);
+  // U+25D0/U+25D1 are EAW=Ambiguous while U+25D2/U+25D3 are Neutral,
+  // despite all four forming one animation. Convert the neutral pair whenever
+  // the ambiguous-width fallback is active so the spinner never alternates
+  // between ASCII and Unicode frames.
+  return codepoint == 0x25d2 || codepoint == 0x25d3;
 }
 
 void ApplyAmbiguousWidthFallback(Screen& screen) {
@@ -832,21 +833,6 @@ void App::Internal::ExitNow() {
 
 void App::Internal::Install() {
   frame_valid_ = false;
-  // East-Asian Ambiguous codepoints occupy two cells under CJK fonts; align
-  // the layout with the locale so text like U+2460 cannot overlap its
-  // neighbours. FTXUI_CJK_AMBIGUOUS_WIDE=1/0 overrides the locale.
-  const char* ambiguous_override =
-      std::getenv("FTXUI_CJK_AMBIGUOUS_WIDE");
-  if (ambiguous_override != nullptr &&
-      (ambiguous_override[0] == '0' || ambiguous_override[0] == '1') &&
-      ambiguous_override[1] == '\0') {
-    SetAmbiguousWidthIsWide(ambiguous_override[0] == '1');
-  } else {
-    SetAmbiguousWidthIsWide(
-        LocaleTreatsAmbiguousAsWide(std::getenv("LC_ALL")) ||
-        LocaleTreatsAmbiguousAsWide(std::getenv("LC_CTYPE")) ||
-        LocaleTreatsAmbiguousAsWide(std::getenv("LANG")));
-  }
   // Entering a new terminal-mode lifetime invalidates what the retained
   // presenter believes is physically visible. This also covers
   // WithRestoredIO() and reusing one App for multiple Loop() calls, where the

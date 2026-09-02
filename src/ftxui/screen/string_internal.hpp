@@ -29,40 +29,6 @@ FTXUI_EXPORT(SCREEN) bool IsAmbiguousWidth(uint32_t ucs);
 FTXUI_EXPORT(SCREEN) bool IsFullWidth(uint32_t ucs);
 FTXUI_EXPORT(SCREEN) bool IsControl(uint32_t ucs);
 
-// East-Asian Ambiguous codepoints occupy one cell in Western terminals and
-// usually two cells under CJK fonts. Terminals decide per glyph, so the
-// layout width is a runtime choice: when enabled, ambiguous codepoints
-// occupy two cells, except box-drawing glyphs that CJK fonts almost always
-// render narrow.
-FTXUI_EXPORT(SCREEN) void SetAmbiguousWidthIsWide(bool wide);
-FTXUI_EXPORT(SCREEN) bool AmbiguousWidthIsWide();
-
-// @brief Test whether one locale string implies CJK ambiguous-width layout
-//
-// @param locale getenv-style locale string; null and empty mean Western
-// @return True for zh/ja/ko language prefixes
-FTXUI_EXPORT(SCREEN)
-bool LocaleTreatsAmbiguousAsWide(const char* locale);
-
-// @brief Cells one codepoint occupies under the current ambiguous mode
-//
-// Fullwidth always takes two cells; East-Asian Ambiguous codepoints take
-// two cells when the wide mode is enabled, except box drawing.
-//
-// @param ucs Unicode codepoint
-// @return 1 or 2 cells; control and combining inputs are not handled
-FTXUI_EXPORT(SCREEN) int CodepointCellWidth(uint32_t ucs);
-
-// @brief Neutral-width companions of ambiguous spinner animations
-//
-// U+25D2/U+25D3 pair with the ambiguous U+25D0/U+25D1 in one animation;
-// layouts that widen ambiguous codepoints must widen them too.
-//
-// @param codepoint Unicode codepoint
-// @return True for the neutral half-circle companions
-FTXUI_EXPORT(SCREEN)
-bool IsAmbiguousWidthAnimationCompanion(uint32_t codepoint);
-
 FTXUI_EXPORT(SCREEN) size_t GlyphPrevious(std::string_view input, size_t start);
 FTXUI_EXPORT(SCREEN) size_t GlyphNext(std::string_view input, size_t start);
 
