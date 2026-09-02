@@ -13,6 +13,7 @@
 #include "ftxui/screen/string.hpp"
 
 #include <array>        // for array
+#include <atomic>       // for atomic
 #include <cstddef>      // for size_t
 #include <cstdint>      // for uint32_t, uint8_t, uint16_t, int32_t
 #include <string>       // for string, basic_string, wstring
@@ -1250,11 +1251,7 @@ int codepoint_width(uint32_t ucs) {
     return 0;
   }
 
-  if (ftxui::IsFullWidth(ucs)) {
-    return 2;
-  }
-
-  return 1;
+  return ftxui::CodepointCellWidth(ucs);
 }
 
 }  // namespace
@@ -1388,6 +1385,42 @@ bool IsAmbiguousWidth(uint32_t ucs) {
   return Bisearch(ucs, g_ambiguous_width_characters);
 }
 
+namespace {
+std::atomic<bool> g_ambiguous_width_is_wide{false};
+}
+
+void SetAmbiguousWidthIsWide(bool wide) {
+  g_ambiguous_width_is_wide.store(wide, std::memory_order_relaxed);
+}
+
+bool AmbiguousWidthIsWide() {
+  return g_ambiguous_width_is_wide.load(std::memory_order_relaxed);
+}
+
+bool LocaleTreatsAmbiguousAsWide(const char* locale) {
+  if (locale == nullptr || locale[0] == '\0') {
+    return false;
+  }
+  const std::string_view value(locale);
+  return value.substr(0, 2) == "zh" ||  // NOLINT
+         value.substr(0, 2) == "ja" ||  // NOLINT
+         value.substr(0, 2) == "ko";    // NOLINT
+}
+
+int CodepointCellWidth(uint32_t ucs) {
+  if (IsFullWidth(ucs)) {
+    return 2;
+  }
+  // CJK layout renders most East-Asian Ambiguous codepoints as two cells.
+  // Box drawing stays narrow: CJK fonts almost always render it one cell
+  // wide, and borders and separators rely on that.
+  if (AmbiguousWidthIsWide() && IsAmbiguousWidth(ucs) &&
+      !(ucs >= 0x2500 && ucs <= 0x257F)) {  // NOLINT
+    return 2;
+  }
+  return 1;
+}
+
 bool IsFullWidth(uint32_t ucs) {
   if (ucs < 0x0300) {  // Quick path: // NOLINT
     return false;
@@ -1494,12 +1527,7 @@ int string_width(std::string_view input) {
       continue;
     }
 
-    if (IsFullWidth(codepoint)) {
-      width += 2;
-      continue;
-    }
-
-    width += 1;
+    width += CodepointCellWidth(codepoint);
   }
   return width;
 }
@@ -1539,9 +1567,9 @@ void Utf8ToGlyphsInto(std::string_view input,
       continue;
     }
 
-    // Fullwidth characters take two cells. The second is made of the empty
+    // Wide characters take two cells. The second is made of the empty
     // string to reserve the space the first is taking.
-    if (IsFullWidth(codepoint)) {
+    if (CodepointCellWidth(codepoint) == 2) {
       out.emplace_back(append);
       out.emplace_back("");
       continue;
@@ -1642,9 +1670,9 @@ std::vector<int> CellToGlyphIndex(std::string_view input) {
       continue;
     }
 
-    // Fullwidth characters take two cells. The second is made of the empty
+    // Wide characters take two cells. The second is made of the empty
     // string to reserve the space the first is taking.
-    if (IsFullWidth(codepoint)) {
+    if (CodepointCellWidth(codepoint) == 2) {
       ++x;
       out.push_back(x);
       out.push_back(x);
