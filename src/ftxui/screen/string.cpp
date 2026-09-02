@@ -1411,13 +1411,13 @@ int CodepointCellWidth(uint32_t ucs) {
   if (IsFullWidth(ucs)) {
     return 2;
   }
-  // CJK layout renders most East-Asian Ambiguous codepoints as two cells.
-  // Box drawing stays narrow: CJK fonts almost always render it one cell
-  // wide, and borders and separators rely on that.
-  if (AmbiguousWidthIsWide() &&
-      (IsAmbiguousWidth(ucs) ||
-       IsAmbiguousWidthAnimationCompanion(ucs)) &&
-      !(ucs >= 0x2500 && ucs <= 0x257F)) {  // NOLINT
+  // CJK layout widens only the enclosed alphanumerics (①④㈠...):
+  // CJK fonts render that family two cells very consistently. Other
+  // ambiguous families — geometric shapes (●◐◆, including the neutral
+  // half-circle companions) and box drawing — stay narrow because CJK
+  // terminals commonly render them one cell and the UI relies on that.
+  if (AmbiguousWidthIsWide() && IsAmbiguousWidth(ucs) &&
+      ucs >= 0x2460 && ucs <= 0x24FF) {  // NOLINT
     return 2;
   }
   return 1;
