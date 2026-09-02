@@ -225,6 +225,7 @@ struct App::Internal {
   std::function<void()> selection_on_change_;
   std::function<void()> selection_on_end_;
   bool selection_end_pending_ = false;
+  std::function<void(int, int)> selection_auto_scroll_;
 
   Component component_;
 
@@ -1407,6 +1408,12 @@ bool App::Internal::HandleSelection(bool handled, Event event) {
   }
 
   if (mouse.motion == Mouse::Moved) {
+    // Consult the auto-scroll handler before refreshing the drag end: the
+    // handler may scroll its viewport and shift the anchors, and the end is
+    // then re-anchored to the pointer below.
+    if (selection_auto_scroll_) {
+      selection_auto_scroll_(mouse.x, mouse.y);
+    }
     if ((mouse.x != selection_data_.end_x) ||
         (mouse.y != selection_data_.end_y)) {
       selection_data_.end_x = mouse.x;
@@ -2369,6 +2376,22 @@ void App::SelectionChange(std::function<void()> callback) {
 
 void App::SelectionEnd(std::function<void()> callback) {
   internal_->selection_on_end_ = std::move(callback);
+}
+
+void App::SelectionAutoScroll(std::function<void(int, int)> handler) {
+  internal_->selection_auto_scroll_ = std::move(handler);
+}
+
+void App::ShiftSelection(int dx, int dy) {
+  auto& data = internal_->selection_data_;
+  if (data.empty) {
+    return;
+  }
+  data.start_x += dx;
+  data.end_x += dx;
+  data.start_y += dy;
+  data.end_y += dy;
+  internal_->frame_valid_ = false;
 }
 
 const std::string& App::TerminalName() const {

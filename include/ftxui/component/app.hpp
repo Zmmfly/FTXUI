@@ -196,6 +196,16 @@ class FTXUI_EXPORT(COMPONENT) App : public Screen {
   /// drag selection. The finalized text is readable via GetSelection().
   void SelectionEnd(std::function<void()> callback);
 
+  /// @brief Set a handler consulted on pointer motion while a drag selection
+  /// is active. It may scroll its viewport and call ShiftSelection to keep
+  /// the highlight glued to the scrolled content.
+  /// @param handler Receives the translated pointer cell coordinates.
+  void SelectionAutoScroll(std::function<void(int, int)> handler);
+
+  /// @brief Translate the active selection anchors by the given screen cells.
+  /// Used after scrolling so the selection follows the scrolled content.
+  void ShiftSelection(int dx, int dy);
+
   // Terminal info.
 
   /// @brief Return the terminal name.
