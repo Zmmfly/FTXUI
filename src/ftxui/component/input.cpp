@@ -695,11 +695,15 @@ class InputBase : public ComponentBase, public InputOption {
       return false;
     }
 
+    // A left press still focuses this input and places the caret, but the
+    // event must stay unconsumed: App::HandleSelection starts a screen-level
+    // drag selection only when a Left Pressed reaches it unhandled, and any
+    // consumed event clears the active selection instead.
     TakeFocus();
 
     if (content->empty()) {
       cursor_position() = 0;
-      return true;
+      return false;
     }
 
     // Soft-wrap: map the click onto the visual-line layout instead of the
@@ -751,7 +755,8 @@ class InputBase : public ComponentBase, public InputOption {
             static_cast<int>(GlyphNext(content(), cursor_position()));
       }
       on_change();
-      return true;
+      // Unconsumed: let the App start a drag selection from this press.
+      return false;
     }
 
     // Find the line and index of the cursor.
@@ -807,7 +812,8 @@ class InputBase : public ComponentBase, public InputOption {
     }
 
     App::PostEventOrExecute(on_change);
-    return true;
+    // Unconsumed: let the App start a drag selection from this press.
+    return false;
   }
 
   bool HandleInsert() {
