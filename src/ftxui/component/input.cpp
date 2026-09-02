@@ -678,34 +678,17 @@ class InputBase : public ComponentBase, public InputOption {
     return true;
   }
 
-  bool HandleMouse(Event event) {
-    hovered_ = box_.Contain(event.mouse().x,  //
-                            event.mouse().y) &&
-               CaptureMouse(event);
-    if (!hovered_) {
-      return false;
-    }
-
-    if (event.mouse().button != Mouse::Left) {
-      return false;
-    }
-    if (event.mouse().motion != Mouse::Pressed) {
-      return false;
-    }
-
-    // A left press still focuses this input and places the caret, but the
-    // event must stay unconsumed: App::HandleSelection starts a screen-level
-    // drag selection only when a Left Pressed reaches it unhandled, and any
-    // consumed event clears the active selection instead.
-    TakeFocus();
-
+  // Map a mouse event inside the box onto the caret position. Shared by
+  // release-time click placement; the caller checks containment.
+  void PlaceCursorFromMouse(Event event) {
     if (content->empty()) {
       cursor_position() = 0;
-      return false;
+      return;
     }
 
     // Soft-wrap: map the click onto the visual-line layout instead of the
-    // logical-line layout, so a click lands on the wrapped row the user sees.
+    // logical-line layout, so a click lands on the wrapped row the user
+    // sees.
     if (wrap_width_ > 0) {
       std::vector<std::pair<size_t, size_t>> vlines;
       size_t base = 0;
@@ -719,8 +702,8 @@ class InputBase : public ComponentBase, public InputOption {
         vlines.emplace_back(0, 0);
       }
 
-      // The cursor box anchors a visible visual line; offset from it by the
-      // click's vertical delta to pick the target visual line.
+      // The cursor box anchors a visible visual line; offset from it by
+      // the click's vertical delta to pick the target visual line.
       int cursor_vline = static_cast<int>(vlines.size()) - 1;
       for (size_t i = 0; i < vlines.size(); ++i) {
         if (cursor_position() <= static_cast<int>(vlines[i].second)) {
@@ -753,8 +736,7 @@ class InputBase : public ComponentBase, public InputOption {
             static_cast<int>(GlyphNext(content(), cursor_position()));
       }
       on_change();
-      // Unconsumed: let the App start a drag selection from this press.
-      return false;
+      return;
     }
 
     // Find the line and index of the cursor.
@@ -774,7 +756,8 @@ class InputBase : public ComponentBase, public InputOption {
             ? GlyphCount(lines[cursor_line].substr(0, cursor_char_index))
             : string_width(lines[cursor_line].substr(0, cursor_char_index));
 
-    int new_cursor_column = cursor_column + event.mouse().x - cursor_box_.x_min;
+    int new_cursor_column =
+        cursor_column + event.mouse().x - cursor_box_.x_min;
     int new_cursor_line = cursor_line + event.mouse().y - cursor_box_.y_min;
 
     // Fix the new cursor position:
@@ -790,7 +773,7 @@ class InputBase : public ComponentBase, public InputOption {
 
     if (new_cursor_column == cursor_column &&  //
         new_cursor_line == cursor_line) {
-      return false;
+      return;
     }
 
     // Convert back the new_cursor_{line,column} toward cursor_position:
@@ -810,7 +793,51 @@ class InputBase : public ComponentBase, public InputOption {
     }
 
     App::PostEventOrExecute(on_change);
-    // Unconsumed: let the App start a drag selection from this press.
+  }
+
+  bool HandleMouse(Event event) {
+    // Finish our own press sequence even when the pointer has left the
+    // box: a drag ending outside must not strand the sequence state.
+    if (m_mouse_press_active) {
+      const auto& mouse = event.mouse();
+      if (mouse.motion == Mouse::Released) {
+        m_mouse_press_active = false;
+        const bool dragged = m_mouse_dragged;
+        m_mouse_dragged = false;
+        // A plain click places the caret on release; a drag selection
+        // leaves the caret where the user was editing.
+        if (!dragged && box_.Contain(mouse.x, mouse.y)) {
+          PlaceCursorFromMouse(event);
+        }
+        return false;
+      }
+      if (mouse.motion == Mouse::Moved && mouse.button == Mouse::Left) {
+        m_mouse_dragged = true;
+        return false;
+      }
+    }
+
+    hovered_ = box_.Contain(event.mouse().x,  //
+                            event.mouse().y) &&
+               CaptureMouse(event);
+    if (!hovered_) {
+      return false;
+    }
+
+    if (event.mouse().button != Mouse::Left) {
+      return false;
+    }
+    if (event.mouse().motion != Mouse::Pressed) {
+      return false;
+    }
+
+    // A left press focuses this input but defers caret placement to the
+    // release: a drag starts an App-level selection and must not move the
+    // caret, and the press itself stays unconsumed so the selection can
+    // start.
+    TakeFocus();
+    m_mouse_press_active = true;
+    m_mouse_dragged = false;
     return false;
   }
 
@@ -822,6 +849,12 @@ class InputBase : public ComponentBase, public InputOption {
   bool Focusable() const final { return true; }
 
   bool hovered_ = false;
+
+  // Our own left-press sequence (press → optional drag → release). The
+  // caret is placed only on a zero-drag release inside the box, so drag
+  // selections never move the caret.
+  bool m_mouse_press_active = false;
+  bool m_mouse_dragged = false;
 
   Box box_;
   Box cursor_box_;
