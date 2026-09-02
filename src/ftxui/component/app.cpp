@@ -1428,7 +1428,12 @@ bool App::Internal::HandleSelection(bool handled, Event event) {
     selection_pending_ = nullptr;
     selection_data_.end_x = mouse.x;
     selection_data_.end_y = mouse.y;
-    selection_data_.empty = false;
+    // A release without any drag is a click: it clears any selection
+    // instead of finalizing a zero-width one, which would otherwise
+    // select and copy the single glyph under the pointer.
+    selection_data_.empty =
+        selection_data_.start_x == selection_data_.end_x &&
+        selection_data_.start_y == selection_data_.end_y;
     selection_end_pending_ = true;
     return true;
   }
