@@ -86,10 +86,17 @@ class Text : public Node {
       const int start = lines_offsets_[i];
       const int end = lines_offsets_[i + 1] - 1;
       for (int j = start; j < end; ++j) {
-        if (sel_start <= x && x <= sel_end) {
+        // Utf8ToGlyphs emits one entry per cell: a full-width glyph is
+        // followed by an empty placeholder holding its second cell. Advance
+        // the column by the glyph's actual width, and select a glyph as a
+        // whole when the selection covers any cell it occupies, so a
+        // selection starting on the second half of a CJK glyph does not
+        // skip it.
+        const int width = string_width(glyphs_[j]);
+        if (width > 0 && x <= sel_end && sel_start < x + width) {
           part += glyphs_[j];
         }
-        x++;
+        x += width;
       }
       selection.AddPart(std::move(part), y, sel_start, sel_end);
     }
@@ -111,21 +118,38 @@ class Text : public Node {
       int x = box_.x_min;
 
       for (auto glyph = glyphs_.begin() + lines_offsets_[line];
-           glyph != glyphs_.end() && *glyph != "\n"; ++glyph, ++x) {
+           glyph != glyphs_.end() && *glyph != "\n"; ++glyph) {
+        // A full-width glyph is followed by an empty placeholder entry for
+        // its second cell. Handle both cells as one unit so the glyph is
+        // inverted as a whole and a selection can not cut it in half.
+        const int width = string_width(*glyph);
+        if (width == 0) {
+          continue;
+        }
         if (x > box_.x_max) {
           break;
         }
 
-        auto& cell = screen.CellAt(x, y);
-        cell.character = *glyph;
-
         const size_t sel_index = line - selection_first_line_;
+        bool selected = false;
         if (sel_index < selection_rows_.size()) {
           const auto& [sel_start, sel_end] = selection_rows_[sel_index];
-          if (sel_start != -1 && x >= sel_start && x <= sel_end) {
+          selected = sel_start != -1 && x <= sel_end && sel_start < x + width;
+        }
+
+        for (int dx = 0; dx < width && x + dx <= box_.x_max; ++dx) {
+          auto& cell = screen.CellAt(x + dx, y);
+          if (dx == 0) {
+            cell.character = *glyph;
+          } else {
+            // Reserve the second cell of a full-width glyph.
+            cell.character = "";
+          }
+          if (selected) {
             screen.GetSelectionStyle()(cell);
           }
         }
+        x += width;
       }
     }
   }
