@@ -188,20 +188,18 @@ class InputBase : public ComponentBase, public InputOption {
 
     // placeholder.
     if (content->empty()) {
-      // Keep the cursor focus on one cell at the input origin. Applying the
-      // focus decorator to the xflex placeholder makes its box span the full
-      // row, and Screen consequently places the terminal/IME cursor at x_max.
-      // The overlay preserves the placeholder while vbox gives the focus row
-      // the same one-line vertical allocation as non-empty input.
+      // The placeholder row is a hint, not content: keep both the hint
+      // text and the focus cell out of screen text selections so copying
+      // an empty input cannot pick them up.
       auto element =
           vbox({
-              dbox({
+              unselectable(dbox({
                   hbox({
                       decorate_cursor(text(" ")) | reflect(cursor_box_),
                       text("") | xflex,
                   }),
                   text(placeholder()),
-              }),
+              })),
           }) |
           xflex | frame;
 

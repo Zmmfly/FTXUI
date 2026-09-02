@@ -4,8 +4,10 @@
 
 #include "ftxui/dom/selection.hpp"  // for Selection
 #include <algorithm>                // for max, min
+#include <memory>                   // for make_shared
 #include <string_view>
 #include <tuple>  // for ignore
+#include <utility>  // for move
 
 #include "ftxui/dom/node_decorator.hpp"  // for NodeDecorator
 
@@ -22,6 +24,10 @@ class Unselectable : public NodeDecorator {
   }
 };
 }  // namespace
+
+Element unselectable(Element child) {
+  return std::make_shared<Unselectable>(std::move(child));
+}
 
 /// @brief Create an empty selection.
 Selection::Selection() = default;

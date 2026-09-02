@@ -116,6 +116,8 @@ FTXUI_EXPORT(DOM) Element underlined(Element);
 FTXUI_EXPORT(DOM) Element underlinedDouble(Element);
 FTXUI_EXPORT(DOM) Element blink(Element);
 FTXUI_EXPORT(DOM) Element strikethrough(Element);
+/// @brief Exclude the child subtree from screen text selections.
+FTXUI_EXPORT(DOM) Element unselectable(Element);
 FTXUI_EXPORT(DOM) Decorator color(Color);
 FTXUI_EXPORT(DOM) Decorator bgcolor(Color);
 FTXUI_EXPORT(DOM) Decorator color(const LinearGradient&);
