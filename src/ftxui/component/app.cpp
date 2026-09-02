@@ -223,6 +223,8 @@ struct App::Internal {
   SelectionData selection_data_previous_;
   std::unique_ptr<Selection> selection_;
   std::function<void()> selection_on_change_;
+  std::function<void()> selection_on_end_;
+  bool selection_end_pending_ = false;
 
   Component component_;
 
@@ -1220,6 +1222,20 @@ void App::Internal::RunOnce(const Component& component) {
       public_->Post(Event::Custom);
     }
   }
+
+  // Notify the finalized selection only after a frame that reflects the
+  // release has been drawn, so GetSelection() reports the final text.
+  // Invalidation is forced because a release alone may leave the frame
+  // valid and skip the selection rebuild.
+  if (selection_end_pending_) {
+    selection_end_pending_ = false;
+    if (selection_on_end_) {
+      frame_valid_ = false;
+      Draw(component);
+      selection_on_end_();
+      public_->Post(Event::Custom);
+    }
+  }
 }
 
 void App::Private::InjectTerminalEventForTesting(App& app, Event event) {
@@ -1406,6 +1422,7 @@ bool App::Internal::HandleSelection(bool handled, Event event) {
     selection_data_.end_x = mouse.x;
     selection_data_.end_y = mouse.y;
     selection_data_.empty = false;
+    selection_end_pending_ = true;
     return true;
   }
 
@@ -2348,6 +2365,10 @@ std::string App::GetSelection() {
 
 void App::SelectionChange(std::function<void()> callback) {
   internal_->selection_on_change_ = std::move(callback);
+}
+
+void App::SelectionEnd(std::function<void()> callback) {
+  internal_->selection_on_end_ = std::move(callback);
 }
 
 const std::string& App::TerminalName() const {

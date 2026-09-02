@@ -192,6 +192,10 @@ class FTXUI_EXPORT(COMPONENT) App : public Screen {
   /// @brief Set a callback that will be called when the selection changes.
   void SelectionChange(std::function<void()> callback);
 
+  /// @brief Set a callback invoked once, after the frame that finalizes a
+  /// drag selection. The finalized text is readable via GetSelection().
+  void SelectionEnd(std::function<void()> callback);
+
   // Terminal info.
 
   /// @brief Return the terminal name.
