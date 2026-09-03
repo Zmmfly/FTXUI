@@ -14,6 +14,7 @@
 #include "ftxui/component/component.hpp"          // for Make, Input
 #include "ftxui/component/component_base.hpp"     // for ComponentBase
 #include "ftxui/component/component_options.hpp"  // for InputOption
+#include "ftxui/component/detail/backspace_accelerator.hpp"
 #include "ftxui/component/event.hpp"  // for Event, Event::ArrowDown, Event::ArrowLeft, Event::ArrowLeftCtrl, Event::ArrowRight, Event::ArrowRightCtrl, Event::ArrowUp, Event::Backspace, Event::Delete, Event::End, Event::Home, Event::Return
 #include "ftxui/component/mouse.hpp"  // for Mouse, Mouse::Left, Mouse::Pressed
 #include "ftxui/dom/elements.hpp"  // for operator|, reflect, text, Element, xflex, hbox, Elements, frame, operator|=, vbox, focus, focusCursorBarBlinking, select
@@ -334,12 +335,20 @@ class InputBase : public ComponentBase, public InputOption {
 
   bool HandleBackspace() {
     if (cursor_position() == 0) {
+      backspace_accelerator_.Reset();
       return false;
     }
-    const size_t start = GlyphPrevious(content(), cursor_position());
-    const size_t end = cursor_position();
-    content->erase(start, end - start);
-    cursor_position() = static_cast<int>(start);
+
+    size_t glyphs = backspace_accelerator_.OnBackspace(
+        detail::BackspaceAccelerator::Clock::now());
+    do {
+      const size_t start = GlyphPrevious(content(), cursor_position());
+      const size_t end = cursor_position();
+      content->erase(start, end - start);
+      cursor_position() = static_cast<int>(start);
+      --glyphs;
+    } while (glyphs != 0 && cursor_position() != 0);
+
     App::PostEventOrExecute(on_change);
     return true;
   }
@@ -584,6 +593,9 @@ class InputBase : public ComponentBase, public InputOption {
   bool OnEvent(Event event) override {
     cursor_position() = util::clamp(cursor_position(), 0, (int)content->size());
 
+    if (detail::ResetsBackspaceAcceleration(event)) {
+      backspace_accelerator_.Reset();
+    }
     if (event.is_character()) {
       return HandleCharacter(event.character());
     }
@@ -856,6 +868,7 @@ class InputBase : public ComponentBase, public InputOption {
   bool m_mouse_press_active = false;
   bool m_mouse_dragged = false;
 
+  detail::BackspaceAccelerator backspace_accelerator_;
   Box box_;
   Box cursor_box_;
 
