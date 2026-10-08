@@ -38,10 +38,44 @@ Selection::Selection() = default;
 /// @param end_x The x coordinate of the end of the selection.
 /// @param end_y The y coordinate of the end of the selection.
 Selection::Selection(int start_x, int start_y, int end_x, int end_y)
+    : Selection(start_x,
+                start_y,
+                end_x,
+                end_y,
+                start_x,
+                start_y,
+                end_x,
+                end_y) {}
+
+/// @brief Create a selection whose endpoints may lie on scrolled content.
+///
+/// Every node selects with the anchors. A node laying out content scrolled
+/// beyond its own box selects that content with the content anchors instead,
+/// which may lie outside of the screen. See ScrolledContent().
+/// @param start_x The x coordinate of the start of the selection.
+/// @param start_y The y coordinate of the start of the selection.
+/// @param end_x The x coordinate of the end of the selection.
+/// @param end_y The y coordinate of the end of the selection.
+/// @param content_start_x The x coordinate of the start on scrolled content.
+/// @param content_start_y The y coordinate of the start on scrolled content.
+/// @param content_end_x The x coordinate of the end on scrolled content.
+/// @param content_end_y The y coordinate of the end on scrolled content.
+Selection::Selection(int start_x,
+                     int start_y,
+                     int end_x,
+                     int end_y,
+                     int content_start_x,
+                     int content_start_y,
+                     int content_end_x,
+                     int content_end_y)
     : start_x_(start_x),
       start_y_(start_y),
       end_x_(end_x),
       end_y_(end_y),
+      content_start_x_(content_start_x),
+      content_start_y_(content_start_y),
+      content_end_x_(content_end_x),
+      content_end_y_(content_end_y),
       box_{
           std::min(start_x, end_x),
           std::max(start_x, end_x),
@@ -59,6 +93,10 @@ Selection::Selection(int start_x,
       start_y_(start_y),
       end_x_(end_x),
       end_y_(end_y),
+      content_start_x_(start_x),
+      content_start_y_(start_y),
+      content_end_x_(end_x),
+      content_end_y_(end_y),
       box_{
           std::min(start_x, end_x),
           std::max(start_x, end_x),
@@ -147,6 +185,23 @@ Selection Selection::SaturateVertical(Box box) {
     }
   }
   return {start_x, start_y, end_x, end_y, parent_};
+}
+
+/// @brief The selection to propagate into content scrolled within a node.
+///
+/// Ancestors saturate a selection to their own box, which never exceeds the
+/// screen, so a node laying out its content beyond its box (scrolled out of
+/// view) could not select the part of it that lies outside. That node selects
+/// its content with this selection instead: it spans the content anchors of
+/// the root selection, unaffected by any saturation, and still reports its
+/// parts to the root selection.
+/// @return The selection between the content anchors.
+Selection Selection::ScrolledContent() const {
+  return {
+      parent_->content_start_x_, parent_->content_start_y_,
+      parent_->content_end_x_,   parent_->content_end_y_,
+      parent_,
+  };
 }
 
 void Selection::AddPart(std::string_view part, int y, int left, int right) {

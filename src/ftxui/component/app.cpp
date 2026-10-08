@@ -205,6 +205,10 @@ struct App::Internal {
     int end_x = -2;
     int end_y = -2;
     bool empty = true;
+    // Whether the pointer placed the anchor inside the selection scroll
+    // region, attaching it to the content drawn there.
+    bool start_attached = false;
+    bool end_attached = false;
     bool operator==(const SelectionData& other) const {
       if (empty && other.empty) {
         return true;
@@ -213,7 +217,9 @@ struct App::Internal {
         return false;
       }
       return start_x == other.start_x && start_y == other.start_y &&
-             end_x == other.end_x && end_y == other.end_y;
+             end_x == other.end_x && end_y == other.end_y &&
+             start_attached == other.start_attached &&
+             end_attached == other.end_attached;
     }
     bool operator!=(const SelectionData& other) const {
       return !(*this == other);
@@ -226,6 +232,12 @@ struct App::Internal {
   std::function<void()> selection_on_end_;
   bool selection_end_pending_ = false;
   std::function<void(int, int)> selection_auto_scroll_;
+  // Region drawing the content selection anchors attach to; unset for the
+  // whole screen.
+  std::optional<Box> selection_scroll_region_;
+  // Set by ScrollSelection while an event is handled: that event keeps the
+  // selection even when handled.
+  bool selection_scrolled_ = false;
 
   Component component_;
 
@@ -318,6 +330,9 @@ struct App::Internal {
   void RunOnceBlocking(Component component);
   void HandleTask(Component component, Task& task);
   bool HandleSelection(bool handled, Event event);
+  Box CurrentSelectionScrollRegion() const;
+  void PlaceSelectionEnd(int x, int y);
+  std::unique_ptr<Selection> MakeSelection() const;
   void Draw(Component component);
   void NotifyPublicPostAccepted() noexcept;
   void NotifyDraw(std::chrono::nanoseconds elapsed, bool rendered) noexcept;
@@ -808,6 +823,21 @@ void InstallSignalHandler(int sig) {
   g_old_sigactions[sig] = old_sa;
   on_exit_functions.emplace([=] { sigaction(sig, &old_sa, nullptr); });
 #endif
+}
+
+// Moves a selection anchor lying outside of |region| onto its edge, like the
+// selection saturation does: an anchor above the region continues the
+// selection from its first cell, and one below it up to its last cell.
+void ClampSelectionAnchor(const Box& region, int& x, int& y) {
+  if (y < region.y_min) {
+    x = region.x_min;
+    y = region.y_min;
+  } else if (y > region.y_max) {
+    x = region.x_max;
+    y = region.y_max;
+  } else {
+    x = std::clamp(x, region.x_min, region.x_max);
+  }
 }
 
 }  // namespace
@@ -1329,6 +1359,9 @@ void App::Internal::HandleTask(Component component, Task& task) {
 
       arg.screen_ = public_;
 
+      // ScrollSelection only spares the selection of the event during which
+      // it is called.
+      selection_scrolled_ = false;
       bool handled = component->OnEvent(arg);
       handled = HandleSelection(handled, arg);
 
@@ -1379,6 +1412,16 @@ void App::Internal::HandleTask(Component component, Task& task) {
 
 bool App::Internal::HandleSelection(bool handled, Event event) {
   if (handled) {
+    if (selection_scrolled_) {
+      // The handler scrolled the content under the selection and moved its
+      // attached anchors along (ScrollSelection), so keep the selection.
+      // Content scrolling under a still pointer is a drag motion of its own:
+      // re-anchor the end of a drag in progress to the pointer.
+      if (selection_pending_ && event.is_mouse()) {
+        PlaceSelectionEnd(event.mouse().x, event.mouse().y);
+      }
+      return true;
+    }
     selection_pending_ = nullptr;
     selection_data_.empty = true;
     selection_ = nullptr;
@@ -1400,6 +1443,9 @@ bool App::Internal::HandleSelection(bool handled, Event event) {
     selection_data_.start_y = mouse.y;
     selection_data_.end_x = mouse.x;
     selection_data_.end_y = mouse.y;
+    selection_data_.start_attached =
+        CurrentSelectionScrollRegion().Contain(mouse.x, mouse.y);
+    selection_data_.end_attached = selection_data_.start_attached;
     return false;
   }
 
@@ -1414,13 +1460,7 @@ bool App::Internal::HandleSelection(bool handled, Event event) {
     if (selection_auto_scroll_) {
       selection_auto_scroll_(mouse.x, mouse.y);
     }
-    if ((mouse.x != selection_data_.end_x) ||
-        (mouse.y != selection_data_.end_y)) {
-      selection_data_.end_x = mouse.x;
-      selection_data_.end_y = mouse.y;
-      selection_data_.empty = false;
-    }
-
+    PlaceSelectionEnd(mouse.x, mouse.y);
     return true;
   }
 
@@ -1428,6 +1468,8 @@ bool App::Internal::HandleSelection(bool handled, Event event) {
     selection_pending_ = nullptr;
     selection_data_.end_x = mouse.x;
     selection_data_.end_y = mouse.y;
+    selection_data_.end_attached =
+        CurrentSelectionScrollRegion().Contain(mouse.x, mouse.y);
     // A release without any drag is a click: it clears any selection
     // instead of finalizing a zero-width one, which would otherwise
     // select and copy the single glyph under the pointer.
@@ -1439,6 +1481,58 @@ bool App::Internal::HandleSelection(bool handled, Event event) {
   }
 
   return false;
+}
+
+Box App::Internal::CurrentSelectionScrollRegion() const {
+  if (selection_scroll_region_) {
+    return *selection_scroll_region_;
+  }
+  return {0, public_->dimx() - 1, 0, public_->dimy() - 1};
+}
+
+void App::Internal::PlaceSelectionEnd(int x, int y) {
+  if ((x != selection_data_.end_x) || (y != selection_data_.end_y)) {
+    selection_data_.end_x = x;
+    selection_data_.end_y = y;
+    selection_data_.empty = false;
+  }
+  selection_data_.end_attached =
+      CurrentSelectionScrollRegion().Contain(x, y);
+}
+
+std::unique_ptr<Selection> App::Internal::MakeSelection() const {
+  const SelectionData& data = selection_data_;
+  if (data.empty) {
+    return std::make_unique<Selection>();
+  }
+  // An attached anchor scrolled out of view selects as if it lay on the
+  // region's edge, so the nodes drawn around the region stay unselected. The
+  // scrolled content (Selection::ScrolledContent) uses the opposite view: it
+  // reaches attached anchors wherever they are, and sees anchors placed
+  // outside of the region on its edge, keeping content hidden beyond that
+  // edge unselected.
+  const Box region = CurrentSelectionScrollRegion();
+  int start_x = data.start_x;
+  int start_y = data.start_y;
+  int end_x = data.end_x;
+  int end_y = data.end_y;
+  int content_start_x = data.start_x;
+  int content_start_y = data.start_y;
+  int content_end_x = data.end_x;
+  int content_end_y = data.end_y;
+  if (data.start_attached) {
+    ClampSelectionAnchor(region, start_x, start_y);
+  } else {
+    ClampSelectionAnchor(region, content_start_x, content_start_y);
+  }
+  if (data.end_attached) {
+    ClampSelectionAnchor(region, end_x, end_y);
+  } else {
+    ClampSelectionAnchor(region, content_end_x, content_end_y);
+  }
+  return std::make_unique<Selection>(
+      start_x, start_y, end_x, end_y,  //
+      content_start_x, content_start_y, content_end_x, content_end_y);
 }
 
 void App::Internal::Draw(Component component) {
@@ -1563,11 +1657,7 @@ void App::Internal::Draw(Component component) {
   }
   previous_frame_resized_ = resized;
 
-  selection_ = selection_data_.empty
-                   ? std::make_unique<Selection>()
-                   : std::make_unique<Selection>(
-                         selection_data_.start_x, selection_data_.start_y,  //
-                         selection_data_.end_x, selection_data_.end_y);
+  selection_ = MakeSelection();
   Render(*public_, document.get(), *selection_);
 
   if (use_differential_presenter) {
@@ -2396,6 +2486,37 @@ void App::ShiftSelection(int dx, int dy) {
   data.end_x += dx;
   data.start_y += dy;
   data.end_y += dy;
+  internal_->frame_valid_ = false;
+}
+
+void App::SelectionScrollRegion(Box region) {
+  std::optional<Box> next;
+  if (!region.IsEmpty()) {
+    next = region;
+  }
+  if (next != internal_->selection_scroll_region_) {
+    internal_->selection_scroll_region_ = next;
+    // The region decides where anchors are clamped for the next frame.
+    internal_->frame_valid_ = false;
+  }
+}
+
+void App::ScrollSelection(int dx, int dy) {
+  internal_->selection_scrolled_ = true;
+  auto& data = internal_->selection_data_;
+  // A drag that has not moved yet is still empty, yet its press anchor must
+  // follow the content all the same.
+  if (data.empty && !internal_->selection_pending_) {
+    return;
+  }
+  if (data.start_attached) {
+    data.start_x += dx;
+    data.start_y += dy;
+  }
+  if (data.end_attached) {
+    data.end_x += dx;
+    data.end_y += dy;
+  }
   internal_->frame_valid_ = false;
 }
 

@@ -14,6 +14,7 @@
 #include "ftxui/component/animation.hpp"  // for TimePoint
 #include "ftxui/component/captured_mouse.hpp"
 #include "ftxui/component/task.hpp"   // for Task, Closure
+#include "ftxui/screen/box.hpp"       // for Box
 #include "ftxui/screen/screen.hpp"    // for Screen
 #include "ftxui/screen/terminal.hpp"  // for Dimensions
 #include "ftxui/util/export.hpp"
@@ -197,14 +198,40 @@ class FTXUI_EXPORT(COMPONENT) App : public Screen {
   void SelectionEnd(std::function<void()> callback);
 
   /// @brief Set a handler consulted on pointer motion while a drag selection
-  /// is active. It may scroll its viewport and call ShiftSelection to keep
-  /// the highlight glued to the scrolled content.
+  /// is active. It may scroll its viewport and call ScrollSelection or
+  /// ShiftSelection to keep the highlight glued to the scrolled content.
   /// @param handler Receives the translated pointer cell coordinates.
   void SelectionAutoScroll(std::function<void(int, int)> handler);
 
   /// @brief Translate the active selection anchors by the given screen cells.
   /// Used after scrolling so the selection follows the scrolled content.
   void ShiftSelection(int dx, int dy);
+
+  /// @brief Set the screen region drawing scrollable content.
+  ///
+  /// A selection anchor the pointer places inside the region attaches to the
+  /// content drawn there, and ScrollSelection moves it along. Once scrolled
+  /// out of view, the anchor selects as if it lay on the region's edge, so
+  /// whatever is drawn around the region stays unselected; only the scrolled
+  /// content itself reaches it, through Selection::ScrolledContent(). That
+  /// content conversely sees an anchor placed outside of the region on the
+  /// region's edge, so a drag ending past the region does not select content
+  /// hidden beyond it.
+  /// @param region The region's screen cells. The default, also restored by
+  /// an empty box, is the whole screen.
+  void SelectionScrollRegion(Box region);
+
+  /// @brief Report that the content in the selection scroll region scrolled
+  /// by the given screen cells.
+  ///
+  /// The selection anchors attached to that content follow it. A handled
+  /// event normally clears the selection; the event handled while this is
+  /// called keeps it instead. A drag in progress then re-anchors its end to
+  /// the pointer of a handled mouse event, so scrolling content under a still
+  /// pointer keeps extending the selection.
+  /// @param dx The horizontal displacement of the content.
+  /// @param dy The vertical displacement of the content.
+  void ScrollSelection(int dx, int dy);
 
   // Terminal info.
 

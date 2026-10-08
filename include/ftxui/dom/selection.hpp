@@ -24,11 +24,20 @@ class FTXUI_EXPORT(DOM) Selection {
  public:
   Selection();  // Empty selection.
   Selection(int start_x, int start_y, int end_x, int end_y);
+  Selection(int start_x,
+            int start_y,
+            int end_x,
+            int end_y,
+            int content_start_x,
+            int content_start_y,
+            int content_end_x,
+            int content_end_y);
 
   const Box& GetBox() const;
 
   Selection SaturateHorizontal(Box box);
   Selection SaturateVertical(Box box);
+  Selection ScrolledContent() const;
   bool IsEmpty() const { return empty_; }
 
   void AddPart(std::string_view part, int y, int left, int right);
@@ -41,6 +50,12 @@ class FTXUI_EXPORT(DOM) Selection {
   const int start_y_ = 0;
   const int end_x_ = 0;
   const int end_y_ = 0;
+  // The endpoints on scrolled content, see ScrolledContent(). Only read on the
+  // root selection.
+  const int content_start_x_ = 0;
+  const int content_start_y_ = 0;
+  const int content_end_x_ = 0;
+  const int content_end_y_ = 0;
   const Box box_ = {};
   Selection* const parent_ = this;
   const bool empty_ = true;
