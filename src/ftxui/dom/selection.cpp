@@ -5,6 +5,7 @@
 #include "ftxui/dom/selection.hpp"  // for Selection
 #include <algorithm>                // for max, min
 #include <memory>                   // for make_shared
+#include <string>                   // for string
 #include <string_view>
 #include <tuple>  // for ignore
 #include <utility>  // for move
@@ -220,11 +221,12 @@ void Selection::AddPart(std::string_view part, int y, int left, int right) {
       return;
     }
 
-    if (x_ == left + 1) {
-      parts_ << part;
-      return;
+    // The cells the layout leaves blank between two parts of a row, such as
+    // the gap between two words of a paragraph, read as spaces on screen.
+    // Copy them as spaces too, so that the words don't run together.
+    if (left > x_ + 1) {
+      parts_ << std::string(left - x_ - 1, ' ');
     }
-
     parts_ << part;
   }();
   y_ = y;

@@ -310,5 +310,27 @@ TEST(SelectionTest, HBoxSaturatedSelection) {
             "         ");
 }
 
+// Each word of a paragraph is its own text, one blank cell apart. The blank
+// cells between the selected words are copied as spaces.
+TEST(SelectionTest, ParagraphSelectionKeepsWordGaps) {
+  auto element = paragraph("Lorem ipsum dolor");
+  auto screen = App::FixedSize(20, 1);
+  Selection selection(2, 0, 13, 0);
+  Render(screen, element.get(), selection);
+  EXPECT_EQ(selection.GetParts(), "rem ipsum do");
+}
+
+TEST(SelectionTest, HBoxSelectionKeepsBlankCellsBetweenTexts) {
+  auto element = hbox({
+      text("Lorem"),
+      filler(),
+      text("ipsum"),
+  });
+  auto screen = App::FixedSize(14, 1);
+  Selection selection(0, 0, 13, 0);
+  Render(screen, element.get(), selection);
+  EXPECT_EQ(selection.GetParts(), "Lorem    ipsum");
+}
+
 }  // namespace ftxui
 // NOLINTEND
