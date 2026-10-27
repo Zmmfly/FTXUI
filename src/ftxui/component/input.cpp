@@ -170,6 +170,20 @@ class InputBase : public ComponentBase, public InputOption {
   InputBase(InputOption option) : InputOption(std::move(option)) {}
 
  private:
+  // Leading content bytes omitted from rendering and mouse mapping while
+  // editing keeps the full buffer. A prefix that would swallow the first
+  // line break is refused entirely so the logical-line layout stays intact.
+  int HiddenPrefixBytes() const {
+    const int prefix =
+        util::clamp(hidden_prefix_bytes(), 0, (int)content->size());
+    const size_t newline = content->find('\n');
+    if (newline != std::string::npos &&
+        newline < static_cast<size_t>(prefix)) {
+      return 0;
+    }
+    return prefix;
+  }
+
   // Component implementation:
   Element OnRender() override {
     const bool is_focused = Focused();
@@ -212,7 +226,12 @@ class InputBase : public ComponentBase, public InputOption {
     }
 
     Elements elements;
-    const std::vector<std::string> lines = SplitLines(*content);
+    // The hidden prefix leaves the buffer untouched; only the rendered
+    // text (and the cursor cell derived from it) skips those bytes.
+    const int hidden_prefix = HiddenPrefixBytes();
+    const std::string displayed_content =
+        content->substr(static_cast<size_t>(hidden_prefix));
+    const std::vector<std::string> lines = SplitLines(displayed_content);
 
     cursor_position() = util::clamp(cursor_position(), 0, (int)content->size());
 
@@ -230,9 +249,10 @@ class InputBase : public ComponentBase, public InputOption {
       }
     }
 
-    // Find the line and index of the cursor.
+    // Find the line and index of the cursor in displayed coordinates; a
+    // cursor inside the hidden prefix clamps onto the first visible glyph.
     int cursor_line = 0;
-    int cursor_char_index = cursor_position();
+    int cursor_char_index = std::max(cursor_position() - hidden_prefix, 0);
     for (const auto& line : lines) {
       if (cursor_char_index <= (int)line.size()) {
         break;
@@ -698,13 +718,21 @@ class InputBase : public ComponentBase, public InputOption {
       return;
     }
 
+    // Clicks land on the rendered text, so map them in displayed
+    // coordinates and shift the result back by the hidden prefix.
+    const int hidden_prefix = HiddenPrefixBytes();
+    const std::string displayed_content =
+        content->substr(static_cast<size_t>(hidden_prefix));
+    const int displayed_cursor =
+        std::max(cursor_position() - hidden_prefix, 0);
+
     // Soft-wrap: map the click onto the visual-line layout instead of the
     // logical-line layout, so a click lands on the wrapped row the user
     // sees.
     if (wrap_width_ > 0) {
       std::vector<std::pair<size_t, size_t>> vlines;
       size_t base = 0;
-      for (const auto& logical : SplitLines(*content)) {
+      for (const auto& logical : SplitLines(displayed_content)) {
         for (const auto& r : WrapLineGlyphs(logical, wrap_width_)) {
           vlines.emplace_back(base + r.first, base + r.second);
         }
@@ -718,7 +746,7 @@ class InputBase : public ComponentBase, public InputOption {
       // the click's vertical delta to pick the target visual line.
       int cursor_vline = static_cast<int>(vlines.size()) - 1;
       for (size_t i = 0; i < vlines.size(); ++i) {
-        if (cursor_position() <= static_cast<int>(vlines[i].second)) {
+        if (displayed_cursor <= static_cast<int>(vlines[i].second)) {
           cursor_vline = static_cast<int>(i);
           break;
         }
@@ -730,12 +758,12 @@ class InputBase : public ComponentBase, public InputOption {
 
       const auto& vl = vlines[target_vline];
       const std::string seg =
-          content().substr(vl.first, vl.second - vl.first);
+          displayed_content.substr(vl.first, vl.second - vl.first);
       const int vl_width = static_cast<int>(string_width(seg));
       int target_column = event.mouse().x - box_.x_min;
       target_column = util::clamp(target_column, 0, vl_width);
 
-      cursor_position() = static_cast<int>(vl.first);
+      cursor_position() = static_cast<int>(vl.first) + hidden_prefix;
       int col = target_column;
       while (col > 0 &&
              cursor_position() < static_cast<int>(content->size()) &&
@@ -751,10 +779,10 @@ class InputBase : public ComponentBase, public InputOption {
       return;
     }
 
-    // Find the line and index of the cursor.
-    std::vector<std::string> lines = SplitLines(*content);
+    // Find the line and index of the cursor in displayed coordinates.
+    std::vector<std::string> lines = SplitLines(displayed_content);
     int cursor_line = 0;
-    int cursor_char_index = cursor_position();
+    int cursor_char_index = displayed_cursor;
     for (const auto& line : lines) {
       if (cursor_char_index <= (int)line.size()) {
         break;
@@ -789,7 +817,9 @@ class InputBase : public ComponentBase, public InputOption {
     }
 
     // Convert back the new_cursor_{line,column} toward cursor_position:
-    cursor_position() = 0;
+    // displayed offsets shift back by the hidden prefix, which the guarded
+    // helper guarantees stays inside the first logical line.
+    cursor_position() = hidden_prefix;
     for (int i = 0; i < new_cursor_line; ++i) {
       cursor_position() += static_cast<int>(lines[i].size() + 1);
     }

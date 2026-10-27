@@ -186,6 +186,12 @@ struct FTXUI_EXPORT(COMPONENT) InputOption {
   Ref<bool> insert = true;     ///< Insert or overtype character mode.
   Ref<bool> cursor_cell_inverted = false;  ///< Invert the cursor cell while
                                            ///< focused for extra contrast.
+  Ref<int> hidden_prefix_bytes = 0;  ///< Omit this many leading content bytes
+                                     ///< from rendering and mouse mapping;
+                                     ///< editing still uses the full buffer.
+                                     ///< The value must be glyph-aligned and
+                                     ///< stay on the first line — a prefix
+                                     ///< spanning '\n' is ignored entirely.
 
   /// Called when the content changes.
   std::function<void()> on_change = [] {};
