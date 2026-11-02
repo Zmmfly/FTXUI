@@ -332,5 +332,51 @@ TEST(SelectionTest, HBoxSelectionKeepsBlankCellsBetweenTexts) {
   EXPECT_EQ(selection.GetParts(), "Lorem    ipsum");
 }
 
+// The blank cells copied as spaces are highlighted too, so the selection
+// reads as one run instead of separate words.
+TEST(SelectionTest, ParagraphSelectionHighlightsWordGaps) {
+  auto element = paragraph("Lorem ipsum dolor");
+  auto screen = App::FixedSize(20, 1);
+  Selection selection(2, 0, 13, 0);
+  Render(screen, element.get(), selection);
+  EXPECT_EQ(selection.GetParts(), "rem ipsum do");
+  for (int x = 0; x < 20; x++) {
+    EXPECT_EQ(screen.CellAt(x, 0).inverted, x >= 2 && x <= 13) << "x=" << x;
+  }
+}
+
+// Blank cells are highlighted only between two parts of a row: never before
+// the first part of a row, and never past the end of a row.
+TEST(SelectionTest, WrappedParagraphHighlightsGapsWithinRows) {
+  // Width 7 wraps the words as "aaa bbb" / "ccc ddd".
+  auto element = paragraph("aaa bbb ccc ddd");
+  auto screen = App::FixedSize(9, 2);
+  Selection selection(1, 0, 4, 1);
+  Render(screen, element.get(), selection);
+  EXPECT_EQ(selection.GetParts(), "aa bbb\nccc d");
+  for (int x = 0; x < 9; x++) {
+    EXPECT_EQ(screen.CellAt(x, 0).inverted, x >= 1 && x <= 6) << "x=" << x;
+    EXPECT_EQ(screen.CellAt(x, 1).inverted, x <= 4) << "x=" << x;
+  }
+}
+
+// The gap takes the selection style of the text after it.
+TEST(SelectionTest, BlankCellsUseTheStyleOfTheFollowingText) {
+  auto element = hbox({
+      text("ab"),
+      filler(),
+      text("cd") | selectionForegroundColor(Color::Red),
+  });
+  auto screen = App::FixedSize(6, 1);
+  Selection selection(0, 0, 5, 0);
+  Render(screen, element.get(), selection);
+  EXPECT_EQ(selection.GetParts(), "ab  cd");
+  for (int x = 0; x < 6; x++) {
+    const Color expected = x < 2 ? Color(Color::Default) : Color(Color::Red);
+    EXPECT_TRUE(screen.CellAt(x, 0).inverted) << "x=" << x;
+    EXPECT_EQ(screen.CellAt(x, 0).foreground_color, expected) << "x=" << x;
+  }
+}
+
 }  // namespace ftxui
 // NOLINTEND

@@ -40,7 +40,7 @@ class FTXUI_EXPORT(DOM) Selection {
   Selection ScrolledContent() const;
   bool IsEmpty() const { return empty_; }
 
-  void AddPart(std::string_view part, int y, int left, int right);
+  int AddPart(std::string_view part, int y, int left, int right);
   std::string GetParts() { return parts_.str(); }
 
  private:

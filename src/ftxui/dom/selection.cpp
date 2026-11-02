@@ -205,11 +205,19 @@ Selection Selection::ScrolledContent() const {
   };
 }
 
-void Selection::AddPart(std::string_view part, int y, int left, int right) {
+/// @brief Append the selected text of one row of a node.
+/// @param part The selected text.
+/// @param y The row of the part.
+/// @param left The first column of the part.
+/// @param right The last column of the part.
+/// @return The first of the blank cells copied as spaces between the previous
+/// part of the row and this one, or `left` when there are none. The caller
+/// highlights those cells, so that the selection shows what gets copied.
+int Selection::AddPart(std::string_view part, int y, int left, int right) {
   if (parent_ != this) {
-    parent_->AddPart(part, y, left, right);
-    return;
+    return parent_->AddPart(part, y, left, right);
   }
+  int blank_start = left;
   [&] {
     if (parts_.str().empty()) {
       parts_ << part;
@@ -226,11 +234,13 @@ void Selection::AddPart(std::string_view part, int y, int left, int right) {
     // Copy them as spaces too, so that the words don't run together.
     if (left > x_ + 1) {
       parts_ << std::string(left - x_ - 1, ' ');
+      blank_start = x_ + 1;
     }
     parts_ << part;
   }();
   y_ = y;
   x_ = right;
+  return blank_start;
 }
 
 }  // namespace ftxui

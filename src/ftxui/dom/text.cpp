@@ -71,7 +71,7 @@ class Text : public Node {
       return;
     }
     selection_first_line_ = first;
-    selection_rows_.assign(last - first, {-1, -1});
+    selection_rows_.assign(last - first, {});
 
     for (size_t i = first; i < last; ++i) {
       const int y = box_.y_min + (int)i;
@@ -79,7 +79,6 @@ class Text : public Node {
       const Selection row_sel = selection.SaturateHorizontal(row_box);
       const int sel_start = row_sel.GetBox().x_min;
       const int sel_end = row_sel.GetBox().x_max;
-      selection_rows_[i - first] = {sel_start, sel_end};
 
       std::string part;
       int x = box_.x_min;
@@ -98,11 +97,15 @@ class Text : public Node {
         }
         x += width;
       }
-      selection.AddPart(std::move(part), y, sel_start, sel_end);
+      const int blank_start =
+          selection.AddPart(std::move(part), y, sel_start, sel_end);
+      selection_rows_[i - first] = {sel_start, sel_end, blank_start};
     }
   }
 
   void Render(Screen& screen) override {
+    RenderBlankCells(screen);
+
     const auto visible_box = Box::Intersection(screen.stencil, box_);
     if (visible_box.IsEmpty()) {
       return;
@@ -133,8 +136,8 @@ class Text : public Node {
         const size_t sel_index = line - selection_first_line_;
         bool selected = false;
         if (sel_index < selection_rows_.size()) {
-          const auto& [sel_start, sel_end] = selection_rows_[sel_index];
-          selected = sel_start != -1 && x <= sel_end && sel_start < x + width;
+          const auto& row = selection_rows_[sel_index];
+          selected = row.start != -1 && x <= row.end && row.start < x + width;
         }
 
         for (int dx = 0; dx < width && x + dx <= box_.x_max; ++dx) {
@@ -155,12 +158,36 @@ class Text : public Node {
   }
 
  private:
+  // The cells between the previous part of a row and this text are copied as
+  // spaces (see Selection::AddPart()). Highlight them as well, so that the
+  // selection reads as one run instead of separate words. Cells outside of
+  // the stencil, such as rows scrolled out of a frame, are left untouched.
+  void RenderBlankCells(Screen& screen) const {
+    for (size_t i = 0; i < selection_rows_.size(); ++i) {
+      const auto& row = selection_rows_[i];
+      const int y = box_.y_min + static_cast<int>(selection_first_line_ + i);
+      for (int x = row.blank_start; x < row.start; ++x) {
+        if (screen.stencil.Contain(x, y)) {
+          screen.GetSelectionStyle()(screen.CellAt(x, y));
+        }
+      }
+    }
+  }
+
+  // The selection of one line: its selected columns, and the first of the
+  // blank cells before it that are copied with it.
+  struct SelectedRow {
+    int start = -1;
+    int end = -1;
+    int blank_start = -1;
+  };
+
   std::vector<std::string> glyphs_;
   std::vector<int> lines_offsets_;
   // Selection state for the line range [selection_first_line_,
   // selection_first_line_ + selection_rows_.size()).
   size_t selection_first_line_ = 0;
-  std::vector<std::pair<int, int>> selection_rows_;
+  std::vector<SelectedRow> selection_rows_;
 };
 
 class VText : public Node {
